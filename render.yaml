@@ -1,0 +1,63 @@
+databases:
+  - name: gestion-captura-db
+    plan: free
+    databaseName: gestion_captura
+    user: gestion_captura
+
+services:
+  - type: web
+    name: gestion-captura-api
+    runtime: python
+    plan: free
+    rootDir: apps/api-django
+    buildCommand: pip install -r requirements.txt && python manage.py migrate && python manage.py collectstatic --noinput
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+    healthCheckPath: /health/
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_DEBUG
+        value: "false"
+      - key: DJANGO_ALLOWED_HOSTS
+        value: gestion-captura-api.onrender.com
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gestion-captura-db
+          property: connectionString
+      - key: APP_URL
+        value: https://gestion-captura-web.onrender.com
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://gestion-captura-web.onrender.com
+      - key: BOOTSTRAP_ADMIN_TOKEN
+        sync: false
+      - key: ENABLE_DEMO_DATA
+        value: "false"
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_STORAGE_BUCKET_NAME
+        sync: false
+      - key: AWS_S3_ENDPOINT_URL
+        sync: false
+      - key: AWS_S3_REGION_NAME
+        value: auto
+      - key: AWS_S3_CUSTOM_DOMAIN
+        sync: false
+
+  - type: web
+    name: gestion-captura-web
+    runtime: static
+    plan: free
+    buildCommand: npm ci && npm run build -w @gestion-captura/web
+    staticPublishPath: apps/web/dist/web/browser
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

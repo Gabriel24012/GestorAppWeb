@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "Gestión de Captura",
+    "slug": "gestion-captura",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "gestioncaptura",
+    "android": { "package": "mx.gestioncaptura.app", "usesCleartextTraffic": true },
+    "plugins": ["expo-secure-store", "expo-image-picker"]
+  }
+}

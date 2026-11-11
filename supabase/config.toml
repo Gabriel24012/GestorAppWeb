@@ -1,0 +1,8 @@
+project_id = "gestion-captura-web"
+
+[api]
+schemas = ["public"]
+
+[auth]
+site_url = "http://localhost:4200"
+additional_redirect_urls = ["http://localhost:4200/auth/confirm"]

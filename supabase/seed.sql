@@ -1,0 +1,1 @@
+-- Datos de demostración intencionalmente vacíos. No se incluyen datos personales.

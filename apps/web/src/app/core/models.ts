@@ -1,0 +1,11 @@
+export type AppRole = 'admin' | 'gestor' | 'capturador';
+export interface Profile { id: string; email: string; full_name: string; role: AppRole; parent_user_id: string | null; is_active: boolean; email_verified?: boolean; email_verified_at?: string | null; profile_image?: string; onboarding_completed_at?: string | null; }
+export interface CaptureContext { manager_id: string; leadership_name: string; }
+export interface CapturerMember { id: string; kind: 'profile' | 'invite'; placeholder_name?: string; full_name?: string; email?: string; email_verified?: boolean; profile_image?: string; status_label: string; onboarding_completed_at?: string | null; created_at?: string; }
+export interface RecordItem { id: string; capture_session_id: string; leadership_name: string; section_code: string; first_name: string; paternal_surname: string; phone: string; electoral_key: string; [key: string]: unknown; }
+export type GoalPeriod = 'daily' | 'weekly' | 'monthly';
+export interface GoalProgress { count: number; target: number; percentage: number; status: string; }
+export interface CapturerGoal { id: string; capturer_id: string | null; period_type: GoalPeriod; target_count: number; starts_on: string; ends_on: string; status: string; archived_at?: string | null; created_by_role?: 'admin' | 'gestor'; capturer?: { id: string; full_name: string; email?: string; is_active?: boolean } | null; progress?: GoalProgress; }
+export interface ManagerCapturerRow extends CapturerMember { total_records: number; records_today: number; records_week: number; current_goal?: CapturerGoal | null; progress?: GoalProgress | null; is_active?: boolean; }
+export interface ManagerOverview { total_records: number; total_capturadores: number; records_today: number; records_week: number; records_month: number; admin_goal?: CapturerGoal | null; team_goal?: CapturerGoal | null; top_zones: Array<{ zone: string; total: number }>; ranking: Array<{ id: string; full_name: string; total_records: number; last_record_at: string | null; current_goal?: CapturerGoal | null }>; inactive_alerts: Array<{ id: string; full_name: string; total_records: number; last_record_at: string | null }>; }
+export interface ManagerRecordsResponse { data: RecordItem[]; meta: { page: number; limit: number; total: number }; }

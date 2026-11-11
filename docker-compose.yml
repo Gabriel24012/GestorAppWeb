@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: gestion-captura-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gestion_captura
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "54329:5432"
+    volumes:
+      - gestion_captura_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gestion_captura"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+volumes:
+  gestion_captura_pgdata:
