@@ -139,7 +139,7 @@ export default function App() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) { Alert.alert('Permiso necesario', 'Permite acceso a tus fotos para elegir una imagen de perfil.'); return; }
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes:['images'], allowsEditing:true, aspect:[1,1], quality:0.85 });
-    if (!result.canceled) { try { const uri = await uploadProfileImage(result.assets[0].uri); setProfile(p=>p?{...p,profile_image:uri}:p); } catch(e) { setError(message(e)); } }
+    if (!result.canceled) { try { const asset = result.assets[0]; const uri = await uploadProfileImage(asset.uri, asset.mimeType, asset.fileName); setProfile(p=>p?{...p,profile_image:uri}:p); } catch(e) { setError(message(e)); } }
   }
 
   async function updatePreference<K extends keyof typeof preferences>(key: K, value: typeof preferences[K]) {

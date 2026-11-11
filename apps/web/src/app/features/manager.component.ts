@@ -171,7 +171,7 @@ export class ManagerDashboardComponent implements OnInit {
           } @else {
             @for(item of capturers(); track item.id) {
             <tr>
-              <td>{{item.full_name || item.placeholder_name || '-'}}</td>
+              <td><div class="member-identity">@if(item.profile_image) {<img class="member-avatar" [src]="item.profile_image" [alt]="'Foto de ' + (item.full_name || item.placeholder_name)">} @else {<span class="member-avatar-fallback">{{initials(item.full_name || item.placeholder_name || '')}}</span>}<span>{{item.full_name || item.placeholder_name || '-'}}</span></div></td>
               <td>{{item.total_records}}</td>
               <td>
                 @if(item.progress) {
@@ -200,6 +200,7 @@ export class ManagerCapturersComponent implements OnInit {
     this.api.get<{data: ManagerCapturerRow[]}>('/manager/capturers').pipe(finalize(() => this.loading.set(false))).subscribe((response) => this.capturers.set(response.data));
   }
   barWidth(value: number) { return Math.min(value, 100); }
+  initials(name: string) { return name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase() || '?'; }
   progressText(progress: NonNullable<ManagerCapturerRow['progress']>) { return `${progress.count} / ${progress.target} - ${progress.percentage}% - ${progress.status}`; }
   deleteCapturer(item: ManagerCapturerRow) {
     if (!window.confirm(`¿Borrar permanentemente a ${item.full_name || item.email}? La acción no se puede deshacer. Si tiene registros asociados, la API bloqueará el borrado y explicará por qué.`)) return;

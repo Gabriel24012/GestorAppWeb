@@ -3,6 +3,11 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
+const envFile = path.join(root, '.env');
+if (fs.existsSync(envFile)) {
+  process.loadEnvFile(envFile);
+}
+
 const windowsPython = path.join(root, 'apps', 'api-django', '.venv', 'Scripts', 'python.exe');
 const unixPython = path.join(root, 'apps', 'api-django', '.venv', 'bin', 'python');
 const python = process.platform === 'win32' ? windowsPython : unixPython;

@@ -23,6 +23,9 @@ html[data-font-size="small"] { font-size: 14px; }
 html[data-font-size="normal"] { font-size: 16px; }
 html[data-font-size="large"] { font-size: 19px; }
 .profile-photo { width:96px; height:96px; object-fit:cover; border-radius:50%; }
+.member-identity { display:flex; align-items:center; gap:10px; min-width:0; }
+.member-avatar, .member-avatar-fallback { width:36px; height:36px; flex:0 0 36px; border-radius:50%; object-fit:cover; }
+.member-avatar-fallback { display:inline-flex; align-items:center; justify-content:center; background:#e7f0ff; color:#154b8a; font-size:12px; font-weight:800; }
 
 * { box-sizing: border-box; }
 html {

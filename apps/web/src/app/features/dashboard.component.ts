@@ -13,6 +13,7 @@ interface AdminManagerRow {
   id: string;
   email: string;
   full_name: string;
+  profile_image?: string;
   is_active: boolean;
   total_capturadores: number;
   capturadores_activos: number;
@@ -53,7 +54,7 @@ interface AdminGoal {
           <tbody>
             @for(manager of managers(); track manager.id) {
               <tr>
-                <td><strong>{{manager.full_name}}</strong><br><small class="muted">{{manager.email}}</small></td>
+                <td><div class="member-identity">@if(manager.profile_image) {<img class="member-avatar" [src]="manager.profile_image" [alt]="'Foto de ' + manager.full_name">} @else {<span class="member-avatar-fallback">{{initials(manager.full_name)}}</span>}<div><strong>{{manager.full_name}}</strong><br><small class="muted">{{manager.email}}</small></div></div></td>
                 <td>{{manager.capturadores_activos}} / {{manager.total_capturadores}}</td>
                 <td>{{manager.total_records}}</td>
                 <td>
@@ -84,6 +85,7 @@ export class AdminDashboardComponent implements OnInit {
   }
   barWidth(value: number) { return Math.min(value, 100); }
   dateTimeText(value: unknown) { return formatDateTimeText(value); }
+  initials(name: string) { return name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase() || '?'; }
   deleteManager(manager: AdminManagerRow) {
     if (!window.confirm(`¿Borrar permanentemente al gestor ${manager.full_name}? La acción no se puede deshacer. Si tiene miembros o registros asociados, el servidor impedirá el borrado y explicará por qué.`)) return;
     this.error.set('');

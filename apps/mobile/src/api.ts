@@ -75,4 +75,13 @@ export async function getPreferences() {
   catch { const cached = await SecureStore.getItemAsync(PREFS); return cached ? JSON.parse(cached) : {theme:'light' as const,font_size:'normal' as const,language:'es' as const}; }
 }
 export async function savePreferences(value: {theme:'light'|'dark';font_size:'small'|'normal'|'large';language:'es'|'en'}) { await SecureStore.setItemAsync(PREFS, JSON.stringify(value)); return (await api<ApiEnvelope<typeof value>>('/preferences', { method:'PATCH', body:JSON.stringify(value) })).data; }
-export async function uploadProfileImage(uri: string) { const form = new FormData(); form.append('image', { uri, name: `profile-${Date.now()}.jpg`, type: 'image/jpeg' } as any); return (await api<ApiEnvelope<{profile_image:string}>>('/profile/image', { method:'POST', body:form })).data.profile_image; }
+export async function uploadProfileImage(uri: string, mimeType?: string | null, fileName?: string | null) {
+  const sourceName = (fileName || uri).split(/[?#]/, 1)[0].toLowerCase();
+  const inferredType = sourceName.endsWith('.png') ? 'image/png' : sourceName.endsWith('.webp') ? 'image/webp' : sourceName.endsWith('.jpg') || sourceName.endsWith('.jpeg') ? 'image/jpeg' : '';
+  const type = mimeType?.toLowerCase() || inferredType;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(type)) throw new Error('Elige una imagen JPEG, PNG o WebP.');
+  const extension = type === 'image/jpeg' ? 'jpg' : type.slice('image/'.length);
+  const form = new FormData();
+  form.append('image', { uri, name: `profile-${Date.now()}.${extension}`, type } as any);
+  return (await api<ApiEnvelope<{profile_image:string}>>('/profile/image', { method:'POST', body:form })).data.profile_image;
+}

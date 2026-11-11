@@ -83,7 +83,7 @@ const teamLabels: Record<string, string> = {
             @for(item of members(); track item.id) {
               <tr>
                 <td>{{item.placeholder_name || item.full_name || '-'}}</td>
-                <td>{{item.kind === 'profile' ? item.full_name : '-'}}</td>
+                <td>@if(item.kind === 'profile') {<div class="member-identity">@if(item.profile_image) {<img class="member-avatar" [src]="item.profile_image" [alt]="'Foto de ' + item.full_name">} @else {<span class="member-avatar-fallback">{{initials(item.full_name || item.placeholder_name || '')}}</span>}<strong>{{item.full_name || item.placeholder_name}}</strong></div>} @else {-}</td>
                 <td>{{item.email || '-'}}</td>
                 <td>{{item.status_label}} @if(item.kind === 'profile'){<small>{{item.email_verified ? 'Correo verificado' : 'Verificación pendiente'}}</small>}</td>
                 <td>
@@ -116,6 +116,8 @@ export class TeamComponent implements OnInit {
   creatingInvite = signal(false);
   copyingInviteId = signal('');
   editingManagerId = signal('');
+
+  initials(name: string) { return name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase() || '?'; }
 
   inviteForm = new FormGroup({
     placeholder_name: new FormControl('', { nonNullable: true, validators: Validators.required }),

@@ -145,11 +145,14 @@ class ProfileImageView(DocumentedAPIView):
         try:
             from PIL import Image
             check = Image.open(image)
+            actual_content_type = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}.get(check.format)
             check.verify()
-            extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[image.content_type]
             image.seek(0)
         except Exception:
             raise ValidationError({"image": "El archivo no es una imagen válida."})
+        if actual_content_type != image.content_type:
+            raise ValidationError({"image": "El tipo de archivo no coincide con su formato real."})
+        extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[actual_content_type]
         if not settings.AWS_STORAGE_BUCKET_NAME:
             return Response({"detail": "El almacenamiento de imágenes no está configurado."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         if request.user.profile_image:

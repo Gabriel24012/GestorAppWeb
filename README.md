@@ -13,6 +13,8 @@ Monorepo para el portal Angular, una API Django REST Framework y la aplicación 
 
 Desde CMD o PowerShell, en la raíz del repositorio:
 
+Las variables locales pueden guardarse en `.env` (ignorado por Git). El comando `dev:api` carga ese archivo al iniciar; nunca subas `.env` al repositorio.
+
 ```powershell
 docker compose up -d db
 py -3.11 -m venv apps\api-django\.venv
@@ -21,7 +23,7 @@ py -3.11 -m venv apps\api-django\.venv
 .\apps\api-django\.venv\Scripts\python.exe apps\api-django\manage.py bootstrap_admin
 ```
 
-La base parte vacía, sin usuarios ni registros de ejemplo. `bootstrap_admin` crea únicamente el administrador inicial `Admin` (`admin@gmail.com`) y solicita una contraseña nueva sin mostrarla; puedes cambiar estos valores con `--email` y `--name`. El correo debe poder recibir mensajes porque las cuentas deben verificarlo antes de iniciar sesión. Para producción configura `RESEND_API_KEY` y un `EMAIL_FROM` validado en Resend; las fotos de perfil requieren credenciales S3 compatibles (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_STORAGE_BUCKET_NAME` y `AWS_S3_ENDPOINT_URL`). Luego abre dos terminales:
+La base parte vacía, sin usuarios ni registros de ejemplo. `bootstrap_admin` crea únicamente el administrador inicial `Admin` (`admin@gmail.com`) y solicita una contraseña nueva sin mostrarla; puedes cambiar estos valores con `--email` y `--name`. El correo debe poder recibir mensajes porque las cuentas deben verificarlo antes de iniciar sesión. Para producción configura `RESEND_API_KEY` y un `EMAIL_FROM` validado en Resend. Las fotos de perfil se guardan en un bucket compatible con S3 como Cloudflare R2; configura sus credenciales en el `.env` local o en las variables secretas del servicio Django en Render. Conserva esas claves privadas y no las subas a Git. Luego abre dos terminales:
 
 > Si vas a importar la base local ficticia de Supabase, omite `bootstrap_admin` por ahora y sigue la sección de importación primero.
 
@@ -85,7 +87,7 @@ La app usa JWT, almacena tokens con Expo SecureStore y tiene pantallas por rol. 
 
 ## Despliegue de prototipo en Render
 
-`render.yaml` define PostgreSQL, API Django y web Angular. Conecta el repositorio desde Render y usa el blueprint. La base se crea vacía; configura un secreto aleatorio `BOOTSTRAP_ADMIN_TOKEN` y verifica `APP_URL` y `CORS_ALLOWED_ORIGINS` con los dominios generados. Crea solo el primer administrador (`admin@gmail.com`, `Admin`) llamando `POST /api/v1/auth/bootstrap` con encabezado `X-Bootstrap-Token` y los campos `email`, `full_name` y `password` (elige una contraseña segura); luego quita el token. La cuenta debe verificar el correo antes de iniciar sesión. Configura en `apps/mobile/.env` la URL HTTPS pública de la API como `EXPO_PUBLIC_API_URL` antes de crear el APK.
+`render.yaml` define PostgreSQL, API Django y web Angular. Conecta el repositorio desde Render y usa el blueprint. La base se crea vacía; configura un secreto aleatorio `BOOTSTRAP_ADMIN_TOKEN`, las variables `AWS_*` del almacenamiento y verifica `APP_URL` y `CORS_ALLOWED_ORIGINS` con los dominios generados. Crea solo el primer administrador (`admin@gmail.com`, `Admin`) llamando `POST /api/v1/auth/bootstrap` con encabezado `X-Bootstrap-Token` y los campos `email`, `full_name` y `password` (elige una contraseña segura); luego quita el token. La cuenta debe verificar el correo antes de iniciar sesión. Configura en `apps/mobile/.env` la URL HTTPS pública de la API como `EXPO_PUBLIC_API_URL` antes de crear el APK.
 
 El build EAS debe tener la variable `EXPO_PUBLIC_API_URL` con la URL HTTPS de la API en su entorno `preview` o `production`; para desarrollo local se define en `apps/mobile/.env`. El nivel gratis es solo para un prototipo ficticio: la API puede dormir y tardar en despertar; Postgres gratuito expira a los 30 días y no tiene respaldos automáticos. Antes de usar información real, migra a infraestructura persistente con respaldos.
 
