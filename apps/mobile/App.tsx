@@ -22,6 +22,7 @@ function Text(props: React.ComponentProps<typeof NativeText>) {
 export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profileImageBusy, setProfileImageBusy] = useState(false);
   const [error, setError] = useState('');
   const [section, setSection] = useState<Section>('Inicio');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -136,10 +137,20 @@ export default function App() {
   }
 
   async function selectProfileImage() {
+    setError(''); setNotice('');
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) { Alert.alert('Permiso necesario', 'Permite acceso a tus fotos para elegir una imagen de perfil.'); return; }
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes:['images'], allowsEditing:true, aspect:[1,1], quality:0.85 });
-    if (!result.canceled) { try { const asset = result.assets[0]; const uri = await uploadProfileImage(asset.uri, asset.mimeType, asset.fileName); setProfile(p=>p?{...p,profile_image:uri}:p); } catch(e) { setError(message(e)); } }
+    if (!result.canceled && result.assets[0]) {
+      setProfileImageBusy(true);
+      try {
+        const asset = result.assets[0];
+        const uri = await uploadProfileImage(asset.uri, asset.mimeType, asset.fileName);
+        setProfile(p=>p?{...p,profile_image:uri}:p);
+        setNotice('Foto de perfil actualizada.');
+      } catch(e) { setError(message(e)); }
+      finally { setProfileImageBusy(false); }
+    }
   }
 
   async function updatePreference<K extends keyof typeof preferences>(key: K, value: typeof preferences[K]) {
@@ -147,8 +158,21 @@ export default function App() {
   }
 
   async function removeProfileImage() {
-    try { await api('/profile/image', {method:'DELETE'}); setProfile(p=>p?{...p,profile_image:''}:p); }
+    setError(''); setNotice(''); setProfileImageBusy(true);
+    try {
+      await api('/profile/image', {method:'DELETE'});
+      setProfile(p=>p?{...p,profile_image:''}:p);
+      setNotice('Foto de perfil eliminada.');
+    }
     catch(e) { setError(message(e)); }
+    finally { setProfileImageBusy(false); }
+  }
+
+  function confirmRemoveProfileImage() {
+    Alert.alert('Eliminar foto', '¿Quieres quitar tu foto de perfil?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Eliminar', style: 'destructive', onPress: () => { void removeProfileImage(); } }
+    ]);
   }
 
   async function submitRecord() {
@@ -301,7 +325,7 @@ export default function App() {
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}
       {detail ? <DetailView detail={detail} role={profile.role} onBack={() => setDetail(null)} onToggle={(row, role) => void toggleProfile(row, role)} onDelete={confirmDeleteProfile} /> : loading ? <ActivityIndicator color={C.blue} style={{ marginTop: 28 }} /> : <>
-        {section === 'Configuración' ? <><Card title="Correo y cuenta"><Text style={styles.rowSub}>{profile.email_verified ? 'Correo verificado' : 'Correo pendiente de verificación'}</Text>{!profile.email_verified ? <Action title="Reenviar verificación" secondary onPress={() => void resendVerification()} /> : null}</Card><Card title="Appearance / Apariencia"><Text style={styles.fieldLabel}>Theme / Tema</Text><ChoiceList rows={[{id:'light',full_name:'Light / Claro'},{id:'dark',full_name:'Dark / Oscuro'}]} value={preferences.theme} onSelect={v=>void updatePreference('theme',v as 'light'|'dark')} placeholder=""/><Text style={styles.fieldLabel}>Text size / Tamaño</Text><ChoiceList rows={['small','normal','large'].map(id=>({id,full_name:id}))} value={preferences.font_size} onSelect={v=>void updatePreference('font_size',v as 'small'|'normal'|'large')} placeholder=""/><Text style={styles.fieldLabel}>Language / Idioma</Text><ChoiceList rows={[{id:'es',full_name:'Español'},{id:'en',full_name:'English'}]} value={preferences.language} onSelect={v=>void updatePreference('language',v as 'es'|'en')} placeholder=""/></Card><Card title="Perfil"><View style={styles.personRow}>{profile.profile_image ? <Image source={{uri:profile.profile_image}} style={styles.avatarImage}/> : <View style={styles.avatar}><Text style={styles.avatarText}>{initials(profile.full_name)}</Text></View>}<Text style={styles.rowTitle}>{profile.full_name}</Text></View><Action title="Cambiar foto de perfil" onPress={()=>void selectProfileImage()}/>{profile.profile_image?<Action title="Eliminar foto" secondary onPress={()=>void removeProfileImage()}/>:null}</Card></> : null}
+        {section === 'Configuración' ? <><Card title="Correo y cuenta"><Text style={styles.rowSub}>{profile.email_verified ? 'Correo verificado' : 'Correo pendiente de verificación'}</Text>{!profile.email_verified ? <Action title="Reenviar verificación" secondary onPress={() => void resendVerification()} /> : null}</Card><Card title="Appearance / Apariencia"><Text style={styles.fieldLabel}>Theme / Tema</Text><ChoiceList rows={[{id:'light',full_name:'Light / Claro'},{id:'dark',full_name:'Dark / Oscuro'}]} value={preferences.theme} onSelect={v=>void updatePreference('theme',v as 'light'|'dark')} placeholder=""/><Text style={styles.fieldLabel}>Text size / Tamaño</Text><ChoiceList rows={['small','normal','large'].map(id=>({id,full_name:id}))} value={preferences.font_size} onSelect={v=>void updatePreference('font_size',v as 'small'|'normal'|'large')} placeholder=""/><Text style={styles.fieldLabel}>Language / Idioma</Text><ChoiceList rows={[{id:'es',full_name:'Español'},{id:'en',full_name:'English'}]} value={preferences.language} onSelect={v=>void updatePreference('language',v as 'es'|'en')} placeholder=""/></Card><Card title="Perfil"><View style={styles.personRow}>{profile.profile_image ? <Image source={{uri:profile.profile_image}} style={styles.avatarImage}/> : <View style={styles.avatar}><Text style={styles.avatarText}>{initials(profile.full_name)}</Text></View>}<Text style={styles.rowTitle}>{profile.full_name}</Text></View><Action title={profileImageBusy ? "Procesando…" : "Cambiar foto de perfil"} disabled={profileImageBusy} onPress={()=>void selectProfileImage()}/>{profile.profile_image?<Action title={profileImageBusy ? "Procesando…" : "Eliminar foto"} disabled={profileImageBusy} secondary onPress={confirmRemoveProfileImage}/>:null}</Card></> : null}
         {section === 'Inicio' && profile.role === 'admin' ? <AdminHome rows={asArray(data)} onOpen={openManager} /> : null}
         {section === 'Inicio' && profile.role === 'gestor' ? <ManagerHome data={data} onSection={changeSection} /> : null}
         {section === 'Inicio' && profile.role === 'capturador' ? <CapturerHome data={data} onSection={changeSection} /> : null}

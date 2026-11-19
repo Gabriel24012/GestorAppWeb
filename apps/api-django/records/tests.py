@@ -1,11 +1,19 @@
 import hashlib
+import io
+import shutil
+import tempfile
 from datetime import date, timedelta
 
+from django.core.files.storage import default_storage
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from django.utils import timezone
+from PIL import Image
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import CaptureSession, EmailVerification, Invitation, Record, User
+from .views import ProfileImageView
 
 
 class AuthenticationAndRoleContractTests(APITestCase):
@@ -92,6 +100,62 @@ class NewAccountFeaturesTests(APITestCase):
         response = self.client.patch("/api/v1/preferences", {"theme": "dark", "font_size": "large", "language": "en"}, format="json")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.get("/api/v1/preferences").data["data"], response.data["data"])
+
+
+class ProfileImageTests(APITestCase):
+    def setUp(self):
+        self.media_root = tempfile.mkdtemp()
+        self.settings_override = override_settings(
+            AWS_STORAGE_BUCKET_NAME="test-bucket",
+            MEDIA_ROOT=self.media_root,
+            MEDIA_URL="/media/",
+            STORAGES={"default": {"BACKEND": "django.core.files.storage.FileSystemStorage"}},
+        )
+        self.settings_override.enable()
+        self.user = User.objects.create_user(email="photo@example.test", password="local-test-password", full_name="Cuenta con foto", role=User.Role.ADMIN, email_verified=True)
+        self.client.force_authenticate(self.user)
+
+    def tearDown(self):
+        self.settings_override.disable()
+        shutil.rmtree(self.media_root, ignore_errors=True)
+
+    @staticmethod
+    def image_file(image_format="PNG", advertised_type="image/png"):
+        content = io.BytesIO()
+        Image.new("RGB", (4, 4), "blue").save(content, format=image_format)
+        return SimpleUploadedFile("mobile-photo", content.getvalue(), content_type=advertised_type)
+
+    def test_mobile_upload_uses_image_contents_when_mime_metadata_is_wrong(self):
+        response = self.client.post(
+            "/api/v1/profile/image",
+            {"image": self.image_file(image_format="PNG", advertised_type="image/jpeg")},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["data"]["profile_image"].endswith(".png"))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.profile_image, response.data["data"]["profile_image"])
+
+    def test_replacing_and_deleting_a_profile_image_removes_the_stored_files(self):
+        first = self.client.post("/api/v1/profile/image", {"image": self.image_file()}, format="multipart")
+        self.user.refresh_from_db()
+        first_name = ProfileImageView._storage_name(self.user)
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(default_storage.exists(first_name))
+
+        second = self.client.post("/api/v1/profile/image", {"image": self.image_file(image_format="JPEG", advertised_type="image/jpeg")}, format="multipart")
+        self.user.refresh_from_db()
+        second_name = ProfileImageView._storage_name(self.user)
+        self.assertEqual(second.status_code, 200)
+        self.assertFalse(default_storage.exists(first_name))
+        self.assertTrue(default_storage.exists(second_name))
+
+        deleted = self.client.delete("/api/v1/profile/image")
+        self.user.refresh_from_db()
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(self.user.profile_image, "")
+        self.assertFalse(default_storage.exists(second_name))
 
 
 class PublicInvitationTests(APITestCase):

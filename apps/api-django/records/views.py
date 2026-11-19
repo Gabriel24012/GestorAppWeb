@@ -134,14 +134,13 @@ class PreferencesView(DocumentedAPIView):
 
 class ProfileImageView(DocumentedAPIView):
     parser_classes = [MultiPartParser, FormParser]
+
     def post(self, request):
         image = request.FILES.get("image")
         if not image:
             raise ValidationError({"image": "Selecciona una imagen."})
         if image.size > 5 * 1024 * 1024:
             raise ValidationError({"image": "La imagen no puede superar 5 MB."})
-        if image.content_type not in ("image/jpeg", "image/png", "image/webp"):
-            raise ValidationError({"image": "Usa una imagen JPEG, PNG o WebP."})
         try:
             from PIL import Image
             check = Image.open(image)
@@ -150,28 +149,46 @@ class ProfileImageView(DocumentedAPIView):
             image.seek(0)
         except Exception:
             raise ValidationError({"image": "El archivo no es una imagen válida."})
-        if actual_content_type != image.content_type:
-            raise ValidationError({"image": "El tipo de archivo no coincide con su formato real."})
+        # Android/iOS sometimes report an empty or incorrect MIME type for files
+        # selected from the photo library. Pillow is the source of truth here.
+        if not actual_content_type:
+            raise ValidationError({"image": "Usa una imagen JPEG, PNG o WebP."})
         extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[actual_content_type]
         if not settings.AWS_STORAGE_BUCKET_NAME:
             return Response({"detail": "El almacenamiento de imágenes no está configurado."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        if request.user.profile_image:
-            old_name = request.user.profile_image.rsplit("/", 1)[-1]
-            try: default_storage.delete(f"profiles/{request.user.id}/{old_name}")
-            except Exception: pass
+
+        old_name = self._storage_name(request.user)
         name = default_storage.save(f"profiles/{request.user.id}/{secrets.token_hex(16)}{extension}", ContentFile(image.read()))
-        request.user.profile_image = default_storage.url(name)
-        request.user.save(update_fields=["profile_image", "updated_at"])
+        try:
+            request.user.profile_image = default_storage.url(name)
+            request.user.save(update_fields=["profile_image", "updated_at"])
+        except Exception:
+            default_storage.delete(name)
+            raise
+        if old_name and old_name != name:
+            try:
+                default_storage.delete(old_name)
+            except Exception:
+                logger.warning("Could not delete replaced profile image %s", old_name, exc_info=True)
         return Response({"data": {"profile_image": request.user.profile_image}})
 
     def delete(self, request):
-        if request.user.profile_image:
-            name = request.user.profile_image.rsplit("/", 1)[-1]
-            try: default_storage.delete(f"profiles/{request.user.id}/{name}")
-            except Exception: pass
+        name = self._storage_name(request.user)
+        if name:
+            try:
+                default_storage.delete(name)
+            except Exception:
+                logger.warning("Could not delete profile image %s", name, exc_info=True)
             request.user.profile_image = ""
             request.user.save(update_fields=["profile_image", "updated_at"])
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @staticmethod
+    def _storage_name(user):
+        if not user.profile_image:
+            return ""
+        filename = user.profile_image.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+        return f"profiles/{user.id}/{filename}" if filename else ""
 
 
 class MeView(DocumentedAPIView):

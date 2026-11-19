@@ -54,7 +54,6 @@ services:
   - type: web
     name: gestion-captura-web
     runtime: static
-    plan: free
     buildCommand: npm ci && npm run build -w @gestion-captura/web
     staticPublishPath: apps/web/dist/web/browser
     routes:

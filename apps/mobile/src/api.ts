@@ -1,6 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 
-const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'http://10.0.2.2:8000/api/v1').replace(/\/$/, '');
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'http://172.20.10.2:8000/api/v1').replace(/\/$/, '');
 const ACCESS = 'access';
 const REFRESH = 'refresh';
 
@@ -78,8 +78,10 @@ export async function savePreferences(value: {theme:'light'|'dark';font_size:'sm
 export async function uploadProfileImage(uri: string, mimeType?: string | null, fileName?: string | null) {
   const sourceName = (fileName || uri).split(/[?#]/, 1)[0].toLowerCase();
   const inferredType = sourceName.endsWith('.png') ? 'image/png' : sourceName.endsWith('.webp') ? 'image/webp' : sourceName.endsWith('.jpg') || sourceName.endsWith('.jpeg') ? 'image/jpeg' : '';
-  const type = mimeType?.toLowerCase() || inferredType;
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(type)) throw new Error('Elige una imagen JPEG, PNG o WebP.');
+  const rawType = mimeType?.toLowerCase().split(';', 1)[0];
+  const reportedType = rawType === 'image/jpg' ? 'image/jpeg' : rawType;
+  const supportedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+  const type = supportedTypes.includes(reportedType || '') ? reportedType! : inferredType || 'image/jpeg';
   const extension = type === 'image/jpeg' ? 'jpg' : type.slice('image/'.length);
   const form = new FormData();
   form.append('image', { uri, name: `profile-${Date.now()}.${extension}`, type } as any);
