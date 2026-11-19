@@ -7,6 +7,8 @@ databases:
 services:
   - type: web
     name: gestion-captura-api
+    repo: https://github.com/Gabriel24012/GestorAppWeb
+    branch: main
     runtime: python
     plan: free
     rootDir: apps/api-django
@@ -53,6 +55,8 @@ services:
 
   - type: web
     name: gestion-captura-web
+    repo: https://github.com/Gabriel24012/GestorAppWeb
+    branch: main
     runtime: static
     buildCommand: npm ci && npm run build -w @gestion-captura/web
     staticPublishPath: apps/web/dist/web/browser
