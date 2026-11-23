@@ -10,7 +10,7 @@ from .views import (
     CaptureContextView,
     CompleteOnboardingView,
     DashboardView,
-    DemoRecordsView,
+    AdminDemoDataView,
     ExportsView,
     FilterOptionsView,
     GoalDetailView,
@@ -62,6 +62,7 @@ urlpatterns = [
     path("admin/manager-goals/<uuid:goal_id>", AdminManagerGoalDetailView.as_view(), name="admin_manager_goal_detail"),
     path("admin/record-filter-options", FilterOptionsView.as_view(), name="admin_record_filter_options"),
     path("admin/records", RecordListCreateView.as_view(), name="admin_records"),
+    path("admin/demo-data", AdminDemoDataView.as_view(), name="admin_demo_data"),
 
     path("capturadores", CapturerListView.as_view(), name="capturers"),
     path("capturadores/invite-links", InviteCreateView.as_view(), name="capturer_invite_links"),
@@ -81,6 +82,5 @@ urlpatterns = [
     path("manager/goals/<uuid:goal_id>", GoalDetailView.as_view(), name="manager_goal_detail"),
     path("manager/record-filter-options", FilterOptionsView.as_view(), name="manager_record_filter_options"),
     path("manager/records", ManagerRecordsView.as_view(), name="manager_records"),
-    path("manager/demo-records", DemoRecordsView.as_view(), name="manager_demo_records"),
     path("exports/records", ExportsView.as_view(), name="record_exports"),
 ]

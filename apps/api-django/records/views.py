@@ -723,34 +723,105 @@ class ExportsView(DocumentedAPIView):
         return response
 
 
-class DemoRecordsView(DocumentedAPIView):
+class AdminDemoDataView(DocumentedAPIView):
     permission_classes = [IsAuthenticated, HasRole]
-    allowed_roles = [User.Role.MANAGER]
+    allowed_roles = [User.Role.ADMIN]
 
+    marker = "[DEMO-ADMIN]"
+    email_suffix = "@demo.gestorapp.local"
+
+    def delete_existing(self):
+        managers = User.objects.filter(role=User.Role.MANAGER, email__endswith=self.email_suffix)
+        manager_ids = list(managers.values_list("id", flat=True))
+        capturers = User.objects.filter(role=User.Role.CAPTURER, parent_user_id__in=manager_ids)
+        capturer_ids = list(capturers.values_list("id", flat=True))
+        records = Record.objects.filter(Q(manager_id__in=manager_ids) | Q(observations__contains=self.marker))
+        counts = {"managers": len(manager_ids), "capturers": len(capturer_ids), "records": records.count()}
+        RecordVersion.objects.filter(record__in=records).delete()
+        records.delete()
+        CaptureSession.objects.filter(Q(manager_id__in=manager_ids) | Q(capturer_id__in=capturer_ids)).delete()
+        capturers.delete()
+        managers.delete()
+        return counts
+
+    @transaction.atomic
     def post(self, request):
         if not getattr(settings, "ENABLE_DEMO_DATA", False):
             raise PermissionDenied("Los datos demo están desactivados.")
-        capturer = User.objects.filter(parent_user=request.user, role=User.Role.CAPTURER, is_active=True).first()
-        if not capturer:
-            raise ValidationError("Necesitas al menos un capturador activo.")
-        count = int(request.data.get("count", 200))
-        if not 1 <= count <= 500:
-            raise ValidationError({"count": "El valor debe estar entre 1 y 500."})
-        session, _ = CaptureSession.objects.get_or_create(capturer=capturer, status=CaptureSession.Status.OPEN, section_code="GENERAL", defaults={"manager": request.user, "leadership_name": request.user.full_name})
-        created = []
-        for idx in range(count):
-            suffix = secrets.token_hex(9).upper()
-            created.append(Record(capture_session=session, capturer=capturer, manager=request.user, leadership_name=request.user.full_name.upper(), section_code="GENERAL", first_name=f"Demo{idx + 1}", paternal_surname="Prueba", address="Domicilio de demostración", birth_date=timezone.localdate() - timedelta(days=365 * 30), phone=f"55{secrets.randbelow(10**8):08d}", electoral_key=suffix, observations="[DEMO-GESTOR] Registro sintético de prueba."))
-        Record.objects.bulk_create(created)
-        audit(request.user, "records", None, "create_demo_records", {"count": len(created)})
-        return Response({"data": {"created": len(created), "marker": "[DEMO-GESTOR]"}}, status=status.HTTP_201_CREATED)
+        self.delete_existing()
+        now = timezone.now()
+        managers = []
+        manager_numbers = {}
+        capturers = []
+        sessions = {}
+        for manager_number in range(1, 6):
+            manager = User.objects.create_user(
+                email=f"demo.manager.{manager_number:02d}{self.email_suffix}", password=None,
+                full_name=f"Gestor Demo {manager_number}", role=User.Role.MANAGER, parent_user=request.user,
+                is_active=True, email_verified=True, email_verified_at=now, onboarding_completed_at=now,
+            )
+            managers.append(manager)
+            manager_numbers[manager.id] = manager_number
+            for capturer_number in range(1, 6):
+                capturer = User.objects.create_user(
+                    email=f"demo.m{manager_number:02d}.capturer.{capturer_number:02d}{self.email_suffix}", password=None,
+                    full_name=f"Capturador Demo {manager_number}-{capturer_number}", role=User.Role.CAPTURER, parent_user=manager,
+                    is_active=True, email_verified=True, email_verified_at=now, onboarding_completed_at=now,
+                )
+                capturers.append(capturer)
+                sessions[capturer.id] = CaptureSession.objects.create(
+                    capturer=capturer, manager=manager, leadership_name=manager.full_name,
+                    section_code=f"SECCION-{manager_number:02d}", network_responsible={"source": "admin-demo"},
+                )
 
+        people = [
+            ("Andrea", "López", "Martínez"), ("Carlos", "Hernández", "García"), ("Mariana", "Rodríguez", "Sánchez"),
+            ("José", "González", "Ramírez"), ("Fernanda", "Pérez", "Torres"), ("Miguel", "Díaz", "Flores"),
+            ("Sofía", "Cruz", "Morales"), ("Luis", "Reyes", "Ortiz"), ("Valeria", "Vargas", "Castillo"),
+            ("Daniel", "Mendoza", "Ruiz"), ("Alejandra", "Jiménez", "Navarro"), ("Jorge", "Ramos", "Méndez"),
+            ("Camila", "Aguilar", "Silva"), ("Ricardo", "Chávez", "Rojas"), ("Natalia", "Herrera", "Vega"),
+            ("Eduardo", "Medina", "Campos"), ("Regina", "Guerrero", "Núñez"), ("Arturo", "Santos", "Ibarra"),
+            ("Paola", "Cortés", "Salazar"), ("Manuel", "Fuentes", "Valdez"),
+        ]
+        places = [
+            ("Av. Reforma", "Centro", "Distrito Norte", "06000"),
+            ("Calle Independencia", "Las Flores", "Distrito Sur", "44100"),
+            ("Blvd. Universidad", "Jardines", "Distrito Este", "64000"),
+            ("Av. Constitución", "San Miguel", "Distrito Oeste", "72000"),
+            ("Calle Hidalgo", "Los Pinos", "Distrito Central", "76000"),
+        ]
+        records = []
+        global_number = 0
+        for capturer in capturers:
+            manager_number = manager_numbers[capturer.parent_user_id]
+            for record_number in range(1, 21):
+                global_number += 1
+                first_name, paternal_surname, maternal_surname = people[(record_number - 1) % len(people)]
+                address, neighborhood, district, postal_code = places[(global_number - 1) % len(places)]
+                records.append(Record(
+                    capture_session=sessions[capturer.id], capturer=capturer, manager=capturer.parent_user,
+                    leadership_name=capturer.parent_user.full_name.upper(), section_code=f"SECCION-{manager_number:02d}",
+                    network_responsible={"source": "admin-demo"}, first_name=first_name,
+                    paternal_surname=paternal_surname, maternal_surname=maternal_surname,
+                    address=address, exterior_number=str(100 + global_number), neighborhood=neighborhood,
+                    district=district, postal_code=postal_code,
+                    birth_date=timezone.localdate() - timedelta(days=365 * (20 + global_number % 45) + global_number % 300),
+                    phone=str(5500000000 + global_number), electoral_key=f"DM{global_number:016d}",
+                    observations=f"{self.marker} Registro {record_number} de {capturer.full_name}.",
+                    created_at=now - timedelta(days=(global_number - 1) % 45, hours=(global_number * 3) % 24),
+                ))
+        Record.objects.bulk_create(records)
+        result = {"managers": len(managers), "capturers": len(capturers), "records": len(records), "records_per_capturer": 20, "marker": self.marker}
+        audit(request.user, "demo_data", None, "create_admin_demo_data", result)
+        return Response({"data": result}, status=status.HTTP_201_CREATED)
+
+    @transaction.atomic
     def delete(self, request):
         if not getattr(settings, "ENABLE_DEMO_DATA", False):
             raise PermissionDenied("Los datos demo están desactivados.")
-        deleted, _ = Record.objects.filter(manager=request.user, observations__contains="[DEMO-GESTOR]").delete()
-        audit(request.user, "records", None, "delete_demo_records", {"deleted": deleted})
-        return Response({"data": {"deleted": deleted, "marker": "[DEMO-GESTOR]"}})
+        deleted = self.delete_existing()
+        audit(request.user, "demo_data", None, "delete_admin_demo_data", deleted)
+        return Response({"data": {**deleted, "marker": self.marker}})
 
 
 def get_managed_profile(actor, profile_id, expected_role):

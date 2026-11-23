@@ -231,6 +231,13 @@ export class AdminManagerDetailComponent implements OnInit {
   imports: [CommonModule, ReactiveFormsModule],
   template: `
     <div class="page-title"><h1>Registros globales</h1><div><button (click)="download('csv')" [disabled]="!total()">CSV filtrado</button><button class="secondary" (click)="download('xlsx')" [disabled]="!total()">Excel filtrado</button></div></div>
+    <section class="card demo-tools-card">
+      <div><h2>Datos demo</h2><p class="muted">Crea 5 gestores, 5 capturadores por gestor y 20 registros completos por capturador (500 registros).</p></div>
+      <div class="demo-actions"><button type="button" (click)="createDemoData()" [disabled]="demoLoading()">{{demoLoading() ? 'Procesando...' : 'Insertar demo'}}</button><button type="button" class="danger" (click)="deleteDemoData()" [disabled]="demoLoading()">Eliminar demo</button></div>
+      @if(demoLoading()) {<div class="request-placeholder"><span class="skeleton-line"></span><span class="skeleton-line skeleton-short"></span></div>}
+      @if(demoMessage()) {<p class="success">{{demoMessage()}}</p>}
+      @if(demoError()) {<p class="error">{{demoError()}}</p>}
+    </section>
     <section class="card records-filter-card">
       <form class="filters records-filters" [formGroup]="filters" (ngSubmit)="search()">
         <label>Buscar<input formControlName="q" placeholder="Nombre, teléfono, Clave Electoral o domicilio..."></label>
@@ -277,16 +284,16 @@ export class AdminManagerDetailComponent implements OnInit {
       }
       <div class="records-table-scroll">
         <table class="records-table">
-          <thead><tr><th>Fecha</th><th>Gestor</th><th>Capturador</th><th>Nombre</th><th>Teléfono</th><th>Clave Electoral</th><th>Fracc.</th><th>Distrito</th><th>C.P.</th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Gestor</th><th>Capturador</th><th>Nombre</th><th>Teléfono</th><th>Clave Electoral</th><th>Domicilio</th><th>No. EXT</th><th>Fracc.</th><th>Distrito</th><th>C.P.</th><th>Obs.</th></tr></thead>
           <tbody>
             @if(recordsLoading()) {
               @for(row of [1,2,3,4,5]; track row) {
-                <tr class="skeleton-table-row">@for(cell of [1,2,3,4,5,6,7,8,9]; track cell) {<td><span class="skeleton-line"></span></td>}</tr>
+                <tr class="skeleton-table-row">@for(cell of [1,2,3,4,5,6,7,8,9,10,11,12]; track cell) {<td><span class="skeleton-line"></span></td>}</tr>
               }
             } @else {
               @for(record of records(); track record.id) {
-                <tr class="clickable-row" [class.active]="editingRecord()?.id === record.id" (click)="editRecord(record)"><td>{{dateTimeText(record.created_at)}}</td><td>{{record.manager?.full_name || '-'}}</td><td>{{record.capturer?.full_name || '-'}}</td><td>{{record.first_name}} {{record.paternal_surname}} {{record.maternal_surname || ''}}</td><td>{{record.phone}}</td><td>{{record.electoral_key}}</td><td>{{record.neighborhood || '-'}}</td><td>{{record.district || '-'}}</td><td>{{record.postal_code || '-'}}</td></tr>
-              } @empty {<tr><td colspan="9">No hay registros con esos filtros.</td></tr>}
+                <tr class="clickable-row" [class.active]="editingRecord()?.id === record.id" (click)="editRecord(record)"><td>{{dateTimeText(record.created_at)}}</td><td>{{record.manager?.full_name || '-'}}</td><td>{{record.capturer?.full_name || '-'}}</td><td>{{record.first_name}} {{record.paternal_surname}} {{record.maternal_surname || ''}}</td><td>{{record.phone}}</td><td>{{record.electoral_key}}</td><td>{{record.address}}</td><td>{{record.exterior_number || '-'}}</td><td>{{record.neighborhood || '-'}}</td><td>{{record.district || '-'}}</td><td>{{record.postal_code || '-'}}</td><td>{{record.observations || '-'}}</td></tr>
+              } @empty {<tr><td colspan="12">No hay registros con esos filtros.</td></tr>}
             }
           </tbody>
         </table>
@@ -306,6 +313,9 @@ export class AdminRecordsComponent implements OnInit {
   editingRecord = signal<RecordItem | null>(null);
   recordMessage = signal('');
   recordError = signal('');
+  demoMessage = signal('');
+  demoError = signal('');
+  demoLoading = signal(false);
   total = signal(0);
   currentPage = signal(1);
   pageSize = signal(10);
@@ -366,6 +376,22 @@ export class AdminRecordsComponent implements OnInit {
   nextPage() { if (this.currentPage() < this.totalPages()) { this.currentPage.update((page) => page + 1); this.load(); } }
   download(format: 'csv'|'xlsx') {
     this.api.download(`/exports/records?${queryString(cleanParams({ ...this.filters.getRawValue(), format }))}`).subscribe((blob) => saveBlob(blob, `registros-globales.${format}`));
+  }
+  createDemoData() {
+    if (!window.confirm('Se crearán 5 gestores, 25 capturadores y 500 registros demo completos. Si ya existe una demo anterior, será reemplazada. ¿Deseas continuar?')) return;
+    this.demoLoading.set(true); this.demoMessage.set(''); this.demoError.set('');
+    this.api.post<{data: {managers: number; capturers: number; records: number}}>('/admin/demo-data', {}).pipe(finalize(() => this.demoLoading.set(false))).subscribe({
+      next: ({data}) => { this.demoMessage.set(`Demo insertada: ${data.managers} gestores, ${data.capturers} capturadores y ${data.records} registros.`); this.currentPage.set(1); this.loadFilterOptions(); this.load(); this.api.get<{data: AdminManagerRow[]}>('/admin/managers').subscribe(response => this.managers.set(response.data)); },
+      error: (e) => this.demoError.set(apiErrorMessage(e))
+    });
+  }
+  deleteDemoData() {
+    if (!window.confirm('Se eliminarán únicamente los gestores, capturadores y registros marcados como demo. ¿Deseas continuar?')) return;
+    this.demoLoading.set(true); this.demoMessage.set(''); this.demoError.set('');
+    this.api.delete<{data: {managers: number; capturers: number; records: number}}>('/admin/demo-data').pipe(finalize(() => this.demoLoading.set(false))).subscribe({
+      next: ({data}) => { this.demoMessage.set(`Demo eliminada: ${data.managers} gestores, ${data.capturers} capturadores y ${data.records} registros.`); this.currentPage.set(1); this.cancelEdit(); this.loadFilterOptions(); this.load(); this.api.get<{data: AdminManagerRow[]}>('/admin/managers').subscribe(response => this.managers.set(response.data)); },
+      error: (e) => this.demoError.set(apiErrorMessage(e))
+    });
   }
   dateTimeText(value: unknown) { return formatDateTimeText(value); }
   editRecord(record: RecordItem) {

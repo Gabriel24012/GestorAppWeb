@@ -89,6 +89,57 @@ class AuthenticationAndRoleContractTests(APITestCase):
         self.assertEqual(external_record.status, Record.Status.ACTIVE)
 
 
+@override_settings(ENABLE_DEMO_DATA=True)
+class AdminDemoDataTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(email="demo-admin@example.test", password="local-test-password", full_name="Admin Demo", role=User.Role.ADMIN, email_verified=True)
+        self.manager = User.objects.create_user(email="regular-manager@example.test", password="local-test-password", full_name="Gestor Real", role=User.Role.MANAGER, parent_user=self.admin, email_verified=True)
+
+    def test_admin_creates_and_deletes_the_complete_demo_hierarchy(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.post("/api/v1/admin/demo-data", {}, format="json")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["data"]["managers"], 5)
+        self.assertEqual(response.data["data"]["capturers"], 25)
+        self.assertEqual(response.data["data"]["records"], 500)
+
+        managers = User.objects.filter(role=User.Role.MANAGER, email__endswith="@demo.gestorapp.local")
+        capturers = User.objects.filter(role=User.Role.CAPTURER, parent_user__in=managers)
+        records = Record.objects.filter(manager__in=managers)
+        self.assertEqual(managers.count(), 5)
+        self.assertEqual(capturers.count(), 25)
+        self.assertEqual(records.count(), 500)
+        self.assertTrue(all(manager.children.filter(role=User.Role.CAPTURER).count() == 5 for manager in managers))
+        self.assertTrue(all(capturer.records_captured.count() == 20 for capturer in capturers))
+        self.assertFalse(records.filter(address="").exists())
+        self.assertFalse(records.filter(exterior_number__isnull=True).exists())
+        self.assertFalse(records.filter(neighborhood__isnull=True).exists())
+        self.assertFalse(records.filter(district__isnull=True).exists())
+        self.assertFalse(records.filter(postal_code__isnull=True).exists())
+        self.assertFalse(records.filter(observations__isnull=True).exists())
+        self.assertGreater(records.values("created_at__date").distinct().count(), 1)
+
+        filtered = self.client.get("/api/v1/admin/records?district=Distrito%20Norte&limit=100")
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual(filtered.data["meta"]["total"], 100)
+
+        deleted = self.client.delete("/api/v1/admin/demo-data")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual({key: deleted.data["data"][key] for key in ("managers", "capturers", "records")}, {"managers": 5, "capturers": 25, "records": 500})
+        self.assertFalse(User.objects.filter(email__endswith="@demo.gestorapp.local").exists())
+        self.assertTrue(User.objects.filter(pk=self.manager.pk).exists())
+
+    def test_manager_cannot_manage_admin_demo_data(self):
+        self.client.force_authenticate(self.manager)
+        self.assertEqual(self.client.post("/api/v1/admin/demo-data", {}, format="json").status_code, 403)
+        self.assertEqual(self.client.delete("/api/v1/admin/demo-data").status_code, 403)
+
+    @override_settings(ENABLE_DEMO_DATA=False)
+    def test_demo_data_respects_feature_flag(self):
+        self.client.force_authenticate(self.admin)
+        self.assertEqual(self.client.post("/api/v1/admin/demo-data", {}, format="json").status_code, 403)
+
+
 class NewAccountFeaturesTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(email="pending@example.test", password="local-test-password", full_name="Cuenta Pendiente", role=User.Role.ADMIN)

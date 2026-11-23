@@ -65,6 +65,7 @@ export default function App() {
   const [editingRecord, setEditingRecord] = useState<AnyRow | null>(null);
   const [recordEditDraft, setRecordEditDraft] = useState<Record<string, string>>({});
   const [recordMutationBusy, setRecordMutationBusy] = useState(false);
+  const [demoDataBusy, setDemoDataBusy] = useState(false);
   const [recordFilters, setRecordFilters] = useState<RecordFilters>(EMPTY_RECORD_FILTERS);
   const [appliedRecordFilters, setAppliedRecordFilters] = useState<RecordFilters>(EMPTY_RECORD_FILTERS);
   const [recordsPage, setRecordsPage] = useState(1);
@@ -256,6 +257,40 @@ export default function App() {
     setAppliedRecordFilters(next);
     setEditingRecord(null);
     void loadRecordsPage(1, next);
+  }
+
+  function confirmCreateDemoData() {
+    Alert.alert(tr('Insertar datos demo', 'Insert demo data'), tr('Se crearán 5 gestores, 25 capturadores y 500 registros completos. La demo anterior será reemplazada.', 'This will create 5 managers, 25 capturers, and 500 complete records. The previous demo will be replaced.'), [
+      { text: tr('Cancelar', 'Cancel'), style: 'cancel' },
+      { text: tr('Insertar demo', 'Insert demo'), onPress: () => { void createDemoData(); } }
+    ]);
+  }
+
+  async function createDemoData() {
+    setDemoDataBusy(true); setError(''); setNotice('');
+    try {
+      const result = await api<{data: {managers: number; capturers: number; records: number}}>('/admin/demo-data', { method: 'POST', body: JSON.stringify({}) });
+      setNotice(currentLanguage === 'en' ? `Demo inserted: ${result.data.managers} managers, ${result.data.capturers} capturers, and ${result.data.records} records.` : `Demo insertada: ${result.data.managers} gestores, ${result.data.capturers} capturadores y ${result.data.records} registros.`);
+      await loadRecordsPage(1, EMPTY_RECORD_FILTERS);
+    } catch (e) { setError(message(e)); }
+    finally { setDemoDataBusy(false); }
+  }
+
+  function confirmDeleteDemoData() {
+    Alert.alert(tr('Eliminar datos demo', 'Delete demo data'), tr('Solo se eliminarán los gestores, capturadores y registros marcados como demo.', 'Only managers, capturers, and records marked as demo will be deleted.'), [
+      { text: tr('Cancelar', 'Cancel'), style: 'cancel' },
+      { text: tr('Eliminar demo', 'Delete demo'), style: 'destructive', onPress: () => { void deleteDemoData(); } }
+    ]);
+  }
+
+  async function deleteDemoData() {
+    setDemoDataBusy(true); setError(''); setNotice('');
+    try {
+      const result = await api<{data: {managers: number; capturers: number; records: number}}>('/admin/demo-data', { method: 'DELETE' });
+      setNotice(currentLanguage === 'en' ? `Demo deleted: ${result.data.managers} managers, ${result.data.capturers} capturers, and ${result.data.records} records.` : `Demo eliminada: ${result.data.managers} gestores, ${result.data.capturers} capturadores y ${result.data.records} registros.`);
+      await loadRecordsPage(1, EMPTY_RECORD_FILTERS);
+    } catch (e) { setError(message(e)); }
+    finally { setDemoDataBusy(false); }
   }
 
   async function createInvite(role: 'gestor' | 'capturador') {
@@ -479,6 +514,7 @@ export default function App() {
         {section === 'Equipo' ? profile.role === 'admin' ? <AdminTeam managers={asArray(data?.managers)} capturers={asArray(data?.capturers)} onOpenManager={openManager} onOpenCapturer={openCapturer} onResendManager={id=>void resendMemberInvite(id,'gestor')} onGenerateManagerLink={id=>void generateMemberLink(id,'gestor')} onResendCapturer={id=>void resendMemberInvite(id,'capturador')} onGenerateCapturerLink={id=>void generateMemberLink(id,'capturador')} /> : <CapturerList rows={asArray(data)} onOpen={openCapturer} onResend={id=>void resendMemberInvite(id,'capturador')} onGenerateLink={id=>void generateMemberLink(id,'capturador')} /> : null}
         {section === 'Registros' ? <>
           {profile.role === 'capturador' ? <RecordForm draft={recordDraft} setDraft={setRecordDraft} onSubmit={() => void submitRecord()} /> : null}
+          {profile.role === 'admin' ? <Card title={tr('Datos demo', 'Demo data')} subtitle={tr('Crea 5 gestores, 5 capturadores por gestor y 20 registros completos por capturador.', 'Create 5 managers, 5 capturers per manager, and 20 complete records per capturer.')}><Action title={demoDataBusy ? tr('Procesando…', 'Processing…') : tr('Insertar demo', 'Insert demo')} disabled={demoDataBusy} onPress={confirmCreateDemoData} /><Action title={tr('Eliminar demo', 'Delete demo')} disabled={demoDataBusy} danger onPress={confirmDeleteDemoData} /></Card> : null}
           {profile.role === 'gestor' ? <RecordsFilterCard filters={recordFilters} setFilters={setRecordFilters} capturers={recordCapturers} onApply={applyRecordsFilter} onClear={clearRecordsFilter} /> : null}
           {editingRecord ? <RecordEditForm draft={recordEditDraft} setDraft={setRecordEditDraft} busy={recordMutationBusy} onSave={() => void saveRecordEdit()} onCancel={() => setEditingRecord(null)} /> : null}
           <RecordsList rows={asArray(data)} total={recordsTotal} page={recordsPage} busy={recordMutationBusy} onPage={page => void loadRecordsPage(page, appliedRecordFilters)} onEdit={beginRecordEdit} onDelete={confirmDeleteRecord} />
@@ -533,7 +569,7 @@ function AdminTeam({ managers, capturers, onOpenManager, onOpenCapturer, onResen
 function RecordsList({ rows, total, page, limit = DETAIL_RECORDS_LIMIT, loading = false, busy = false, onPage, onEdit, onDelete }: { rows: AnyRow[]; total?: number; page?: number; limit?: number; loading?: boolean; busy?: boolean; onPage?: (page: number) => void; onEdit?: (row: AnyRow) => void; onDelete?: (row: AnyRow) => void }) {
   const pages = Math.max(1, Math.ceil((total ?? rows.length) / limit));
   return <Card title={tr('Registros recientes', 'Recent records')} subtitle={currentLanguage === 'en' ? `${total ?? rows.length} total` : `${total ?? rows.length} en total`}>
-    {loading ? <ActivityIndicator color={C.accent} style={{ marginVertical: 18 }} /> : rows.length ? rows.map((row, i) => <View key={row.id || i} style={styles.recordRow}><View style={styles.recordTop}><Text style={styles.rowTitle}>{[row.first_name, row.paternal_surname, row.maternal_surname].filter(Boolean).join(' ') || tr('Registro', 'Record')}</Text><Text style={[styles.status, row.status === 'voided' && styles.statusOff]}>{row.status === 'voided' ? tr('Anulado', 'Voided') : tr('Activo', 'Active')}</Text></View><Text style={styles.rowSub}>{row.phone || tr('Sin teléfono', 'No phone')} · {row.district || tr('Sin municipio', 'No municipality')}</Text><Text style={styles.rowMeta}>{row.neighborhood || tr('Sin colonia', 'No neighborhood')} · {formatDate(row.created_at)}</Text>{onEdit || onDelete ? <View style={styles.recordActions}>{onEdit ? <Action compact secondary disabled={busy} title={tr('Modificar', 'Edit')} onPress={() => onEdit(row)} /> : null}{onDelete ? <Action compact danger disabled={busy} title={tr('Eliminar', 'Delete')} onPress={() => onDelete(row)} /> : null}</View> : null}</View>) : <Empty text={tr('Aún no hay registros para mostrar.', 'There are no records to display yet.')} />}
+    {loading ? <ActivityIndicator color={C.accent} style={{ marginVertical: 18 }} /> : rows.length ? rows.map((row, i) => <View key={row.id || i} style={styles.recordRow}><View style={styles.recordTop}><Text style={styles.rowTitle}>{[row.first_name, row.paternal_surname, row.maternal_surname].filter(Boolean).join(' ') || tr('Registro', 'Record')}</Text><Text style={[styles.status, row.status === 'voided' && styles.statusOff]}>{row.status === 'voided' ? tr('Anulado', 'Voided') : tr('Activo', 'Active')}</Text></View><Text style={styles.rowSub}>{row.capturer?.full_name ? `${row.capturer.full_name} · ` : ''}{row.phone || tr('Sin teléfono', 'No phone')}</Text><Text style={styles.rowMeta}>{tr('Clave electoral', 'Voter ID key')}: {row.electoral_key || '—'}</Text><Text style={styles.rowMeta}>{row.address || tr('Sin domicilio', 'No address')} {row.exterior_number ? `#${row.exterior_number}` : ''}</Text><Text style={styles.rowMeta}>{row.neighborhood || tr('Sin colonia', 'No neighborhood')} · {row.district || tr('Sin distrito', 'No district')} · {row.postal_code || tr('Sin C.P.', 'No postal code')}</Text><Text style={styles.rowMeta}>{formatDate(row.created_at)} · {row.observations || tr('Sin observaciones', 'No notes')}</Text>{onEdit || onDelete ? <View style={styles.recordActions}>{onEdit ? <Action compact secondary disabled={busy} title={tr('Modificar', 'Edit')} onPress={() => onEdit(row)} /> : null}{onDelete ? <Action compact danger disabled={busy} title={tr('Eliminar', 'Delete')} onPress={() => onDelete(row)} /> : null}</View> : null}</View>) : <Empty text={tr('Aún no hay registros para mostrar.', 'There are no records to display yet.')} />}
     {page && pages > 1 ? <View style={styles.pagination}><Pressable disabled={page <= 1 || loading} onPress={() => onPage?.(page - 1)} style={[styles.pageButton, (page <= 1 || loading) && styles.pageButtonDisabled]}><Text style={styles.pageButtonText}>{tr('Anterior', 'Previous')}</Text></Pressable><Text style={styles.pageSummary}>{tr('Página', 'Page')} {page} {tr('de', 'of')} {pages}</Text><Pressable disabled={page >= pages || loading} onPress={() => onPage?.(page + 1)} style={[styles.pageButton, (page >= pages || loading) && styles.pageButtonDisabled]}><Text style={styles.pageButtonText}>{tr('Siguiente', 'Next')}</Text></Pressable></View> : null}
   </Card>;
 }

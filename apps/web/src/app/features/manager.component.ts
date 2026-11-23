@@ -217,19 +217,6 @@ export class ManagerCapturersComponent implements OnInit {
   imports: [CommonModule, ReactiveFormsModule],
   template: `
     <div class="page-title"><h1>Registros del equipo</h1><div><button (click)="download('csv')" [disabled]="!total()">CSV filtrado</button><button class="secondary" (click)="download('xlsx')" [disabled]="!total()">Excel filtrado</button></div></div>
-    <section class="card demo-tools-card">
-      <div>
-        <h2>Datos demo</h2>
-        <p class="muted">Genera 200 registros marcados como demo para probar filtros, metas, rankings y exportaciones.</p>
-      </div>
-      <div class="demo-actions">
-        <button type="button" (click)="createDemoRecords()" [disabled]="demoLoading()">{{demoLoading() ? 'Procesando...' : 'Generar 200 demo'}}</button>
-        <button type="button" class="danger" (click)="deleteDemoRecords()" [disabled]="demoLoading()">Eliminar demo</button>
-      </div>
-      @if(demoLoading()) {<div class="request-placeholder"><span class="skeleton-line"></span><span class="skeleton-line skeleton-short"></span></div>}
-      @if(demoMessage()) {<p class="success">{{demoMessage()}}</p>}
-      @if(demoError()) {<p class="error">{{demoError()}}</p>}
-    </section>
     <section class="card records-filter-card">
       <form class="filters records-filters" [formGroup]="filters" (ngSubmit)="search()">
         <label>Buscar<input formControlName="q" placeholder="Nombre, teléfono, Clave Electoral o domicilio..."></label>
@@ -317,9 +304,6 @@ export class ManagerRecordsComponent implements OnInit {
   editingRecord = signal<RecordItem | null>(null);
   recordMessage = signal('');
   recordError = signal('');
-  demoMessage = signal('');
-  demoError = signal('');
-  demoLoading = signal(false);
   total = signal(0);
   currentPage = signal(1);
   pageSize = signal(10);
@@ -433,35 +417,6 @@ export class ManagerRecordsComponent implements OnInit {
     this.api.download(`/exports/records?${queryString(this.params({ format }))}`).subscribe((blob) => saveBlob(blob, `registros-equipo.${format}`));
   }
   dateTimeText(value: unknown) { return formatDateTimeText(value); }
-  createDemoRecords() {
-    if (!window.confirm('Se generaran 200 registros demo para este gestor. Deseas continuar?')) return;
-    this.demoLoading.set(true);
-    this.demoMessage.set('');
-    this.demoError.set('');
-    this.api.post<{data: {created: number}}>('/manager/demo-records', { count: 200 }).pipe(finalize(() => this.demoLoading.set(false))).subscribe({
-      next: (response) => {
-        this.demoMessage.set(`${response.data.created} registros demo generados.`);
-        this.loadFilterOptions();
-        this.load();
-      },
-      error: (e) => this.demoError.set(apiErrorMessage(e))
-    });
-  }
-  deleteDemoRecords() {
-    if (!window.confirm('Se eliminaran solo los registros marcados como demo de este gestor. Deseas continuar?')) return;
-    this.demoLoading.set(true);
-    this.demoMessage.set('');
-    this.demoError.set('');
-    this.api.delete<{data: {deleted: number}}>('/manager/demo-records').pipe(finalize(() => this.demoLoading.set(false))).subscribe({
-      next: (response) => {
-        this.demoMessage.set(`${response.data.deleted} registros demo eliminados.`);
-        this.editingRecord.set(null);
-        this.loadFilterOptions();
-        this.load();
-      },
-      error: (e) => this.demoError.set(apiErrorMessage(e))
-    });
-  }
   private load() {
     this.recordsLoading.set(true);
     this.saveState();
