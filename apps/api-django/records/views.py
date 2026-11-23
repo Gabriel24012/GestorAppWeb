@@ -89,7 +89,7 @@ class BootstrapAdminView(DocumentedAPIView):
         validate_password(password)
         if User.objects.filter(role=User.Role.ADMIN).exists():
             raise PermissionDenied("El administrador inicial ya fue creado.")
-        user = User.objects.create_user(email=email, password=password, full_name=name, role=User.Role.ADMIN, is_active=True, onboarding_completed_at=timezone.now())
+        user = User.objects.create_user(email=email, password=password, full_name=name, role=User.Role.ADMIN, is_active=True, is_staff=True, is_superuser=True, onboarding_completed_at=timezone.now())
         sent = send_verification_email(user)
         return Response({"data": ProfileSerializer(user).data, "email_sent": sent, "detail": "Confirma tu correo para poder iniciar sesión."}, status=status.HTTP_201_CREATED)
 
