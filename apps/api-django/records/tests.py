@@ -62,6 +62,32 @@ class AuthenticationAndRoleContractTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["meta"]["total"], 2)
 
+    def test_manager_can_update_a_record_from_its_team(self):
+        self.client.force_authenticate(self.manager)
+        response = self.client.patch(f"/api/v1/records/{self.own_record.id}", {"first_name": "Ana editada"}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.own_record.refresh_from_db()
+        self.assertEqual(self.own_record.first_name, "Ana editada")
+        self.assertEqual(self.own_record.versions.count(), 1)
+
+    def test_manager_delete_voids_a_record_from_its_team(self):
+        self.client.force_authenticate(self.manager)
+        response = self.client.delete(f"/api/v1/records/{self.own_record.id}")
+        self.assertEqual(response.status_code, 204)
+        self.own_record.refresh_from_db()
+        self.assertEqual(self.own_record.status, Record.Status.VOIDED)
+
+    def test_manager_cannot_change_a_record_from_another_team(self):
+        other_manager = User.objects.create_user(email="other-manager@example.test", password="local-test-password", full_name="Gestor Externo", role=User.Role.MANAGER, parent_user=self.admin, email_verified=True)
+        external_capturer = User.objects.create_user(email="external-capturer@example.test", password="local-test-password", full_name="Capturador Externo", role=User.Role.CAPTURER, parent_user=other_manager, email_verified=True)
+        external_record = Record.objects.create(capturer=external_capturer, manager=other_manager, leadership_name=other_manager.full_name, first_name="Fuera", paternal_surname="Equipo", address="Calle Externa", birth_date=date(1990, 1, 1), phone="5512345680", electoral_key="DDDD000000HDFXXX04")
+        self.client.force_authenticate(self.manager)
+        self.assertEqual(self.client.patch(f"/api/v1/records/{external_record.id}", {"first_name": "Alterado"}, format="json").status_code, 404)
+        self.assertEqual(self.client.delete(f"/api/v1/records/{external_record.id}").status_code, 404)
+        external_record.refresh_from_db()
+        self.assertEqual(external_record.first_name, "Fuera")
+        self.assertEqual(external_record.status, Record.Status.ACTIVE)
+
 
 class NewAccountFeaturesTests(APITestCase):
     def setUp(self):

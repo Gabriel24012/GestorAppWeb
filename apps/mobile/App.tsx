@@ -6,6 +6,9 @@ import { ApiEnvelope, Profile, api, currentUser, getPreferences, login, logout, 
 
 type Section = 'Inicio' | 'Captura' | 'Registros' | 'Gestores' | 'Capturadores' | 'Equipo' | 'Metas' | 'Configuración';
 type AnyRow = Record<string, any>;
+type RecordFilters = { q: string; capturer_id: string; date_from: string; date_to: string; address: string; district: string; neighborhood: string; postal_code: string };
+const EMPTY_RECORD_FILTERS: RecordFilters = { q: '', capturer_id: '', date_from: '', date_to: '', address: '', district: '', neighborhood: '', postal_code: '' };
+const DETAIL_RECORDS_LIMIT = 10;
 const RECORD_FIELDS: Array<[string, string, string, 'default' | 'numeric' | 'phone-pad']> = [
   ['first_name', 'Nombre(s)', 'First name(s)', 'default'], ['paternal_surname', 'Apellido paterno', 'Paternal surname', 'default'], ['maternal_surname', 'Apellido materno (opcional)', 'Maternal surname (optional)', 'default'],
   ['address', 'Domicilio', 'Address', 'default'], ['exterior_number', 'Número exterior', 'Street number', 'default'], ['neighborhood', 'Colonia', 'Neighborhood', 'default'],
@@ -54,6 +57,19 @@ export default function App() {
   const [goalEnd, setGoalEnd] = useState(new Date(Date.now() + 6 * 86400000).toISOString().slice(0, 10));
   const [detail, setDetail] = useState<AnyRow | null>(null);
   const [detailTitle, setDetailTitle] = useState('');
+  const [detailCapturerId, setDetailCapturerId] = useState('');
+  const [detailRecords, setDetailRecords] = useState<AnyRow[]>([]);
+  const [detailRecordsPage, setDetailRecordsPage] = useState(1);
+  const [detailRecordsTotal, setDetailRecordsTotal] = useState(0);
+  const [detailRecordsLoading, setDetailRecordsLoading] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<AnyRow | null>(null);
+  const [recordEditDraft, setRecordEditDraft] = useState<Record<string, string>>({});
+  const [recordMutationBusy, setRecordMutationBusy] = useState(false);
+  const [recordFilters, setRecordFilters] = useState<RecordFilters>(EMPTY_RECORD_FILTERS);
+  const [appliedRecordFilters, setAppliedRecordFilters] = useState<RecordFilters>(EMPTY_RECORD_FILTERS);
+  const [recordsPage, setRecordsPage] = useState(1);
+  const [recordsTotal, setRecordsTotal] = useState(0);
+  const [recordCapturers, setRecordCapturers] = useState<AnyRow[]>([]);
   const [preferences, setPreferences] = useState<{theme:'light'|'dark';font_size:'small'|'normal'|'large';language:'es'|'en'}>({theme:'light',font_size:'normal',language:'es'});
   C = preferences.theme === 'dark' ? DARK_COLORS : LIGHT_COLORS;
   styles = STYLE_CACHE[preferences.theme];
@@ -64,6 +80,11 @@ export default function App() {
     setSection(next);
     setMenuOpen(false);
     setDetail(null);
+    setDetailCapturerId('');
+    setDetailRecords([]);
+    setDetailRecordsPage(1);
+    setDetailRecordsTotal(0);
+    setEditingRecord(null);
     setInviteLink('');
     setInviteLinkOwner('');
     setInviteLinkSection(null);
@@ -99,6 +120,7 @@ export default function App() {
   async function loadSection() {
     if (!profile) return;
     if (section === 'Configuración') { setPayload({}); setLoading(false); return; }
+    if (section === 'Registros') { await loadRecordsPage(1, appliedRecordFilters); return; }
     setLoading(true); setError(''); setDetail(null);
     try {
       let path = '/dashboard/admin';
@@ -107,7 +129,6 @@ export default function App() {
       else if (section === 'Gestores') path = '/gestores?role=gestor';
       else if (section === 'Capturadores') path = profile.role === 'gestor' ? '/capturadores' : '/capturadores';
       else if (section === 'Equipo') path = '/capturadores';
-      else if (section === 'Registros') path = profile.role === 'admin' ? '/admin/records?limit=30' : profile.role === 'gestor' ? '/manager/records?limit=30' : '/records?limit=30';
       else if (section === 'Metas') path = '/manager/goals';
       const result = await api<any>(path);
       setPayload(result);
@@ -200,8 +221,41 @@ export default function App() {
       const body = { ...recordDraft, electoral_key: recordDraft.electoral_key?.trim().toUpperCase(), capture_session_id: captureSessionId || null, section_code: 'GENERAL' };
       await api('/records', { method: 'POST', body: JSON.stringify(body) });
       setRecordDraft({}); Alert.alert(tr('Registro guardado', 'Record saved'), tr('El registro se agregó correctamente.', 'The record was added successfully.'));
-      changeSection('Registros');
+      if (section === 'Registros') await loadRecordsPage(1, appliedRecordFilters);
+      else changeSection('Registros');
     } catch (e) { setError(message(e)); }
+  }
+
+  async function loadRecordsPage(page: number, filters: RecordFilters = appliedRecordFilters) {
+    if (!profile) return;
+    setLoading(true); setError(''); setDetail(null); setEditingRecord(null);
+    try {
+      const path = profile.role === 'admin' ? '/admin/records' : profile.role === 'gestor' ? '/manager/records' : '/records';
+      const query = queryString({ ...filters, status: 'active', page, limit: DETAIL_RECORDS_LIMIT });
+      const requests: Promise<any>[] = [api<ApiEnvelope<AnyRow[]>>(`${path}?${query}`)];
+      if (profile.role === 'gestor' && !recordCapturers.length) requests.push(api<any>('/manager/capturers'));
+      const [result, capturersResult] = await Promise.all(requests);
+      setPayload(result);
+      setRecordsPage(result.meta?.page || page);
+      setRecordsTotal(result.meta?.total ?? asArray(result.data).length);
+      if (capturersResult) setRecordCapturers(asArray(unwrap(capturersResult)).filter(row => row.kind !== 'invite'));
+    } catch (e) { setError(message(e)); }
+    finally { setLoading(false); }
+  }
+
+  function applyRecordsFilter() {
+    const next = { ...recordFilters };
+    setAppliedRecordFilters(next);
+    setEditingRecord(null);
+    void loadRecordsPage(1, next);
+  }
+
+  function clearRecordsFilter() {
+    const next = { ...EMPTY_RECORD_FILTERS };
+    setRecordFilters(next);
+    setAppliedRecordFilters(next);
+    setEditingRecord(null);
+    void loadRecordsPage(1, next);
   }
 
   async function createInvite(role: 'gestor' | 'capturador') {
@@ -290,9 +344,72 @@ export default function App() {
         const result = await api<any>('/capturadores');
         setDetail({ capturer: asArray(unwrap(result)).find(row => row.id === id) || { id, full_name: name } });
       }
+      setDetailCapturerId(id);
       setDetailTitle(name);
+      await loadCapturerRecords(id, 1);
     } catch (e) { setError(message(e)); }
     finally { setLoading(false); }
+  }
+
+  async function loadCapturerRecords(capturerId: string, page: number) {
+    if (!profile || !capturerId) return;
+    setDetailRecordsLoading(true); setError(''); setEditingRecord(null);
+    try {
+      const path = profile.role === 'admin' ? '/admin/records' : '/manager/records';
+      const result = await api<ApiEnvelope<AnyRow[]>>(`${path}?capturer_id=${encodeURIComponent(capturerId)}&status=active&page=${page}&limit=${DETAIL_RECORDS_LIMIT}`);
+      setDetailRecords(asArray(result.data));
+      setDetailRecordsPage(result.meta?.page || page);
+      setDetailRecordsTotal(result.meta?.total ?? result.data.length);
+    } catch (e) { setError(message(e)); }
+    finally { setDetailRecordsLoading(false); }
+  }
+
+  function beginRecordEdit(record: AnyRow) {
+    setEditingRecord(record);
+    setRecordEditDraft(Object.fromEntries(RECORD_FIELDS.map(([name]) => [name, record[name] == null ? '' : String(record[name])])));
+    setError(''); setNotice('');
+  }
+
+  async function saveRecordEdit() {
+    if (!editingRecord) return;
+    setRecordMutationBusy(true); setError(''); setNotice('');
+    try {
+      await api(`/records/${editingRecord.id}`, { method: 'PATCH', body: JSON.stringify({ ...recordEditDraft, electoral_key: recordEditDraft.electoral_key?.trim().toUpperCase() }) });
+      setEditingRecord(null);
+      setNotice(tr('Registro actualizado correctamente.', 'Record updated successfully.'));
+      if (detailCapturerId) await loadCapturerRecords(detailCapturerId, detailRecordsPage);
+      else await loadRecordsPage(recordsPage, appliedRecordFilters);
+    } catch (e) { setError(message(e)); }
+    finally { setRecordMutationBusy(false); }
+  }
+
+  function confirmDeleteRecord(record: AnyRow) {
+    const name = [record.first_name, record.paternal_surname].filter(Boolean).join(' ') || tr('este registro', 'this record');
+    Alert.alert(tr('Eliminar registro', 'Delete record'), currentLanguage === 'en' ? `Delete ${name}? It will be removed from the active records, but its audit history will be preserved.` : `¿Eliminar ${name}? Dejará de aparecer entre los registros activos, pero se conservará su historial de auditoría.`, [
+      { text: tr('Cancelar', 'Cancel'), style: 'cancel' },
+      { text: tr('Eliminar', 'Delete'), style: 'destructive', onPress: () => { void deleteRecord(record); } }
+    ]);
+  }
+
+  async function deleteRecord(record: AnyRow) {
+    setRecordMutationBusy(true); setError(''); setNotice('');
+    try {
+      await api(`/records/${record.id}`, { method: 'DELETE' });
+      const remaining = Math.max(0, detailRecordsTotal - 1);
+      const lastPage = Math.max(1, Math.ceil(remaining / DETAIL_RECORDS_LIMIT));
+      const nextPage = Math.min(detailRecordsPage, lastPage);
+      setEditingRecord(current => current?.id === record.id ? null : current);
+      setNotice(tr('Registro eliminado correctamente.', 'Record deleted successfully.'));
+      if (detailCapturerId) {
+        setDetail(current => current ? { ...current, total_records: Math.max(0, Number(current.total_records || 0) - 1) } : current);
+        await loadCapturerRecords(detailCapturerId, nextPage);
+      } else {
+        const generalRemaining = Math.max(0, recordsTotal - 1);
+        const generalLastPage = Math.max(1, Math.ceil(generalRemaining / DETAIL_RECORDS_LIMIT));
+        await loadRecordsPage(Math.min(recordsPage, generalLastPage), appliedRecordFilters);
+      }
+    } catch (e) { setError(message(e)); }
+    finally { setRecordMutationBusy(false); }
   }
 
   async function toggleProfile(row: AnyRow, role: 'gestor' | 'capturador') {
@@ -343,7 +460,7 @@ export default function App() {
       <View style={styles.pageTitle}><Text style={styles.heading}>{detail ? detailTitle : sectionLabel(section)}</Text><Text style={styles.muted}>{detail ? tr('Resumen y actividad', 'Summary and activity') : subtitleFor(section, profile.role)}</Text></View>
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}
-      {detail ? <DetailView detail={detail} role={profile.role} onBack={() => setDetail(null)} onToggle={(row, role) => void toggleProfile(row, role)} onDelete={confirmDeleteProfile} /> : loading ? <ActivityIndicator color={C.accent} style={{ marginTop: 28 }} /> : <>
+      {detail ? <DetailView detail={detail} role={profile.role} records={detailRecords} recordsPage={detailRecordsPage} recordsTotal={detailRecordsTotal} recordsLoading={detailRecordsLoading} recordMutationBusy={recordMutationBusy} editingRecord={editingRecord} recordEditDraft={recordEditDraft} setRecordEditDraft={setRecordEditDraft} onBack={() => { setDetail(null); setDetailCapturerId(''); setDetailRecords([]); setEditingRecord(null); }} onToggle={(row, role) => void toggleProfile(row, role)} onDelete={confirmDeleteProfile} onRecordsPage={page => void loadCapturerRecords(detailCapturerId, page)} onEditRecord={beginRecordEdit} onCancelRecordEdit={() => setEditingRecord(null)} onSaveRecordEdit={() => void saveRecordEdit()} onDeleteRecord={confirmDeleteRecord} /> : loading ? <ActivityIndicator color={C.accent} style={{ marginTop: 28 }} /> : <>
         {section === 'Configuración' ? <>
           <Card title={tr('Correo y cuenta', 'Email and account')}><Text style={styles.rowSub}>{profile.email_verified ? tr('Correo verificado', 'Email verified') : tr('Correo pendiente de verificación', 'Email verification pending')}</Text>{!profile.email_verified ? <Action title={tr('Reenviar verificación', 'Resend verification')} secondary onPress={() => void resendVerification()} /> : null}</Card>
           <Card title={tr('Apariencia', 'Appearance')}>
@@ -360,7 +477,12 @@ export default function App() {
         {section === 'Gestores' && profile.role === 'admin' ? <><ManagerList rows={asArray(data)} onOpen={openManager} onResend={id=>void resendMemberInvite(id,'gestor')} onGenerateLink={id=>void generateMemberLink(id,'gestor')} /><InviteForm role="admin" inviteName={inviteName} setInviteName={setInviteName} inviteEmail={inviteEmail} setInviteEmail={setInviteEmail} onInvite={createInvite} /></> : null}
         {section === 'Capturadores' && profile.role === 'gestor' ? <><CapturerList rows={asArray(data)} onOpen={openCapturer} onResend={id=>void resendMemberInvite(id,'capturador')} onGenerateLink={id=>void generateMemberLink(id,'capturador')} /><InviteForm role="gestor" inviteName={inviteName} setInviteName={setInviteName} inviteEmail={inviteEmail} setInviteEmail={setInviteEmail} onInvite={createInvite} /></> : null}
         {section === 'Equipo' ? profile.role === 'admin' ? <AdminTeam managers={asArray(data?.managers)} capturers={asArray(data?.capturers)} onOpenManager={openManager} onOpenCapturer={openCapturer} onResendManager={id=>void resendMemberInvite(id,'gestor')} onGenerateManagerLink={id=>void generateMemberLink(id,'gestor')} onResendCapturer={id=>void resendMemberInvite(id,'capturador')} onGenerateCapturerLink={id=>void generateMemberLink(id,'capturador')} /> : <CapturerList rows={asArray(data)} onOpen={openCapturer} onResend={id=>void resendMemberInvite(id,'capturador')} onGenerateLink={id=>void generateMemberLink(id,'capturador')} /> : null}
-        {section === 'Registros' ? profile.role === 'capturador' ? <><RecordForm draft={recordDraft} setDraft={setRecordDraft} onSubmit={() => void submitRecord()} /><RecordsList rows={asArray(data)} total={payload?.meta?.total} /></> : <RecordsList rows={asArray(data)} total={payload?.meta?.total} /> : null}
+        {section === 'Registros' ? <>
+          {profile.role === 'capturador' ? <RecordForm draft={recordDraft} setDraft={setRecordDraft} onSubmit={() => void submitRecord()} /> : null}
+          {profile.role === 'gestor' ? <RecordsFilterCard filters={recordFilters} setFilters={setRecordFilters} capturers={recordCapturers} onApply={applyRecordsFilter} onClear={clearRecordsFilter} /> : null}
+          {editingRecord ? <RecordEditForm draft={recordEditDraft} setDraft={setRecordEditDraft} busy={recordMutationBusy} onSave={() => void saveRecordEdit()} onCancel={() => setEditingRecord(null)} /> : null}
+          <RecordsList rows={asArray(data)} total={recordsTotal} page={recordsPage} busy={recordMutationBusy} onPage={page => void loadRecordsPage(page, appliedRecordFilters)} onEdit={beginRecordEdit} onDelete={confirmDeleteRecord} />
+        </> : null}
         {section === 'Metas' ? <GoalsView data={data} role={profile.role} managers={asArray((payload as any)?.managers)} capturers={asArray((payload as any)?.capturers)} managerId={managerId} setManagerId={setManagerId} goalCapturerId={goalCapturerId} setGoalCapturerId={setGoalCapturerId} goalTarget={goalTarget} setGoalTarget={setGoalTarget} goalStart={goalStart} setGoalStart={setGoalStart} goalEnd={goalEnd} setGoalEnd={setGoalEnd} onCreate={() => void createGoal()} /> : null}
       </>}
     </ScrollView>
@@ -408,9 +530,34 @@ function AdminTeam({ managers, capturers, onOpenManager, onOpenCapturer, onResen
   return <><ManagerList rows={managers} onOpen={onOpenManager} onResend={onResendManager} onGenerateLink={onGenerateManagerLink} /><CapturerList rows={capturers} onOpen={onOpenCapturer} onResend={onResendCapturer} onGenerateLink={onGenerateCapturerLink} /></>;
 }
 
-function RecordsList({ rows, total }: { rows: AnyRow[]; total?: number }) {
+function RecordsList({ rows, total, page, limit = DETAIL_RECORDS_LIMIT, loading = false, busy = false, onPage, onEdit, onDelete }: { rows: AnyRow[]; total?: number; page?: number; limit?: number; loading?: boolean; busy?: boolean; onPage?: (page: number) => void; onEdit?: (row: AnyRow) => void; onDelete?: (row: AnyRow) => void }) {
+  const pages = Math.max(1, Math.ceil((total ?? rows.length) / limit));
   return <Card title={tr('Registros recientes', 'Recent records')} subtitle={currentLanguage === 'en' ? `${total ?? rows.length} total` : `${total ?? rows.length} en total`}>
-    {rows.length ? rows.map((row, i) => <View key={row.id || i} style={styles.recordRow}><View style={styles.recordTop}><Text style={styles.rowTitle}>{[row.first_name, row.paternal_surname, row.maternal_surname].filter(Boolean).join(' ') || tr('Registro', 'Record')}</Text><Text style={[styles.status, row.status === 'voided' && styles.statusOff]}>{row.status === 'voided' ? tr('Anulado', 'Voided') : tr('Activo', 'Active')}</Text></View><Text style={styles.rowSub}>{row.phone || tr('Sin teléfono', 'No phone')} · {row.district || tr('Sin municipio', 'No municipality')}</Text><Text style={styles.rowMeta}>{row.neighborhood || tr('Sin colonia', 'No neighborhood')} · {formatDate(row.created_at)}</Text></View>) : <Empty text={tr('Aún no hay registros para mostrar.', 'There are no records to display yet.')} />}
+    {loading ? <ActivityIndicator color={C.accent} style={{ marginVertical: 18 }} /> : rows.length ? rows.map((row, i) => <View key={row.id || i} style={styles.recordRow}><View style={styles.recordTop}><Text style={styles.rowTitle}>{[row.first_name, row.paternal_surname, row.maternal_surname].filter(Boolean).join(' ') || tr('Registro', 'Record')}</Text><Text style={[styles.status, row.status === 'voided' && styles.statusOff]}>{row.status === 'voided' ? tr('Anulado', 'Voided') : tr('Activo', 'Active')}</Text></View><Text style={styles.rowSub}>{row.phone || tr('Sin teléfono', 'No phone')} · {row.district || tr('Sin municipio', 'No municipality')}</Text><Text style={styles.rowMeta}>{row.neighborhood || tr('Sin colonia', 'No neighborhood')} · {formatDate(row.created_at)}</Text>{onEdit || onDelete ? <View style={styles.recordActions}>{onEdit ? <Action compact secondary disabled={busy} title={tr('Modificar', 'Edit')} onPress={() => onEdit(row)} /> : null}{onDelete ? <Action compact danger disabled={busy} title={tr('Eliminar', 'Delete')} onPress={() => onDelete(row)} /> : null}</View> : null}</View>) : <Empty text={tr('Aún no hay registros para mostrar.', 'There are no records to display yet.')} />}
+    {page && pages > 1 ? <View style={styles.pagination}><Pressable disabled={page <= 1 || loading} onPress={() => onPage?.(page - 1)} style={[styles.pageButton, (page <= 1 || loading) && styles.pageButtonDisabled]}><Text style={styles.pageButtonText}>{tr('Anterior', 'Previous')}</Text></Pressable><Text style={styles.pageSummary}>{tr('Página', 'Page')} {page} {tr('de', 'of')} {pages}</Text><Pressable disabled={page >= pages || loading} onPress={() => onPage?.(page + 1)} style={[styles.pageButton, (page >= pages || loading) && styles.pageButtonDisabled]}><Text style={styles.pageButtonText}>{tr('Siguiente', 'Next')}</Text></Pressable></View> : null}
+  </Card>;
+}
+
+function RecordEditForm({ draft, setDraft, busy, onSave, onCancel }: { draft: Record<string, string>; setDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>; busy: boolean; onSave: () => void; onCancel: () => void }) {
+  return <Card title={tr('Modificar registro', 'Edit record')} subtitle={tr('Actualiza los datos y guarda los cambios.', 'Update the information and save your changes.')}>
+    {RECORD_FIELDS.map(([name, labelEs, labelEn, keyboardType]) => <TextInput key={name} style={styles.input} placeholder={tr(labelEs, labelEn)} value={draft[name] || ''} keyboardType={keyboardType} autoCapitalize={name === 'electoral_key' ? 'characters' : 'sentences'} onChangeText={value => setDraft(current => ({ ...current, [name]: value }))} />)}
+    <View style={styles.recordActions}><Action title={busy ? tr('Guardando…', 'Saving…') : tr('Guardar cambios', 'Save changes')} disabled={busy} compact onPress={onSave} /><Action title={tr('Cancelar', 'Cancel')} disabled={busy} compact secondary onPress={onCancel} /></View>
+  </Card>;
+}
+
+function RecordsFilterCard({ filters, setFilters, capturers, onApply, onClear }: { filters: RecordFilters; setFilters: React.Dispatch<React.SetStateAction<RecordFilters>>; capturers: AnyRow[]; onApply: () => void; onClear: () => void }) {
+  const update = (key: keyof RecordFilters, value: string) => setFilters(current => ({ ...current, [key]: value }));
+  return <Card title={tr('Filtrar registros', 'Filter records')} subtitle={tr('Busca y combina filtros como en el panel web.', 'Search and combine filters as in the web dashboard.')}>
+    <Text style={styles.fieldLabel}>{tr('Buscar', 'Search')}</Text>
+    <TextInput style={styles.input} placeholder={tr('Nombre, teléfono, clave electoral o domicilio', 'Name, phone, voter ID key, or address')} value={filters.q} onChangeText={value => update('q', value)} returnKeyType="search" onSubmitEditing={onApply} />
+    <Text style={styles.fieldLabel}>{tr('Capturador', 'Capturer')}</Text>
+    <ChoiceList rows={[{ id: '', full_name: tr('Todos los capturadores', 'All capturers') }, ...capturers]} value={filters.capturer_id} onSelect={value => update('capturer_id', value)} placeholder={tr('No hay capturadores disponibles.', 'No capturers are available.')} />
+    <View style={styles.filterPair}><View style={styles.filterField}><Text style={styles.fieldLabel}>{tr('Desde', 'From')}</Text><TextInput style={styles.input} placeholder={tr('AAAA-MM-DD', 'YYYY-MM-DD')} value={filters.date_from} onChangeText={value => update('date_from', value)} /></View><View style={styles.filterField}><Text style={styles.fieldLabel}>{tr('Hasta', 'To')}</Text><TextInput style={styles.input} placeholder={tr('AAAA-MM-DD', 'YYYY-MM-DD')} value={filters.date_to} onChangeText={value => update('date_to', value)} /></View></View>
+    <TextInput style={styles.input} placeholder={tr('Domicilio', 'Address')} value={filters.address} onChangeText={value => update('address', value)} />
+    <TextInput style={styles.input} placeholder={tr('Distrito', 'District')} value={filters.district} onChangeText={value => update('district', value)} />
+    <TextInput style={styles.input} placeholder={tr('Fraccionamiento o colonia', 'Neighborhood')} value={filters.neighborhood} onChangeText={value => update('neighborhood', value)} />
+    <TextInput style={styles.input} placeholder={tr('Código postal', 'Postal code')} keyboardType="numeric" value={filters.postal_code} onChangeText={value => update('postal_code', value)} />
+    <View style={styles.recordActions}><Action compact title={tr('Filtrar', 'Apply filters')} onPress={onApply} /><Action compact secondary title={tr('Limpiar', 'Clear')} onPress={onClear} /></View>
   </Card>;
 }
 
@@ -440,12 +587,12 @@ function InviteForm(props: {role:'admin'|'gestor'; inviteName:string; setInviteN
   </Card>;
 }
 
-function DetailView({ detail, role, onBack, onToggle, onDelete }: { detail: AnyRow; role: Profile['role']; onBack: () => void; onToggle: (row: AnyRow, role: 'gestor' | 'capturador') => void; onDelete: (row: AnyRow, role: 'gestor' | 'capturador') => void }) {
+function DetailView({ detail, role, records, recordsPage, recordsTotal, recordsLoading, recordMutationBusy, editingRecord, recordEditDraft, setRecordEditDraft, onBack, onToggle, onDelete, onRecordsPage, onEditRecord, onCancelRecordEdit, onSaveRecordEdit, onDeleteRecord }: { detail: AnyRow; role: Profile['role']; records: AnyRow[]; recordsPage: number; recordsTotal: number; recordsLoading: boolean; recordMutationBusy: boolean; editingRecord: AnyRow | null; recordEditDraft: Record<string, string>; setRecordEditDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>; onBack: () => void; onToggle: (row: AnyRow, role: 'gestor' | 'capturador') => void; onDelete: (row: AnyRow, role: 'gestor' | 'capturador') => void; onRecordsPage: (page: number) => void; onEditRecord: (row: AnyRow) => void; onCancelRecordEdit: () => void; onSaveRecordEdit: () => void; onDeleteRecord: (row: AnyRow) => void }) {
   const manager = detail.manager || detail;
   const capturer = detail.capturer || detail.profile || detail;
   const isManager = role === 'admin' && Boolean(detail.manager || detail.total_capturadores !== undefined);
   if (isManager) return <><Action title={tr('Volver a la lista', 'Back to list')} secondary onPress={onBack} /><View style={styles.stats}><Stat label={tr('Capturadores', 'Capturers')} value={detail.total_capturadores || 0} /><Stat label={tr('Registros', 'Records')} value={detail.total_records || 0} /><Stat label={tr('Metas activas', 'Active goals')} value={detail.active_goals || 0} /></View><Card title={tr('Perfil', 'Profile')}><Info label={tr('Nombre', 'Name')} value={manager.full_name} /><Info label={tr('Correo', 'Email')} value={manager.email} /><Info label={tr('Estado', 'Status')} value={manager.is_active === false ? tr('Inactivo', 'Inactive') : tr('Activo', 'Active')} /><Action title={manager.is_active === false ? tr('Activar gestor', 'Activate manager') : tr('Desactivar gestor', 'Deactivate manager')} secondary onPress={() => onToggle(manager, 'gestor')} /><Action title={tr('Borrar gestor permanentemente', 'Permanently delete manager')} danger onPress={() => onDelete(manager, 'gestor')} /></Card><Card title={tr('Metas activas', 'Active goals')}>{asArray(detail.active_goals_list).length ? asArray(detail.active_goals_list).map((goal, i) => <GoalRow key={goal.id || i} goal={goal} />) : <Empty text={tr('Sin metas activas.', 'No active goals.')} />}</Card><Card title={tr('Capturadores con más registros', 'Capturers with the most records')}><Rankings rows={asArray(detail.ranking)} /></Card><Card title={tr('Zonas principales', 'Top areas')}><Rankings rows={asArray(detail.top_zones).map((r: AnyRow) => ({ full_name: r.zone, total_records: r.total }))} /></Card></>;
-  return <><Action title={tr('Volver a la lista', 'Back to list')} secondary onPress={onBack} /><View style={styles.stats}><Stat label={tr('Registros', 'Records')} value={detail.total_records || capturer.total_records || 0} /><Stat label={tr('Hoy', 'Today')} value={capturer.records_today || 0} /><Stat label={tr('Esta semana', 'This week')} value={capturer.records_week || 0} /></View><Card title={tr('Perfil', 'Profile')}><Info label={tr('Nombre', 'Name')} value={capturer.full_name || capturer.placeholder_name} /><Info label={tr('Correo', 'Email')} value={capturer.email} /><Info label={tr('Estado', 'Status')} value={capturer.is_active === false ? tr('Inactivo', 'Inactive') : tr('Activo', 'Active')} /><Action title={capturer.is_active === false ? tr('Activar capturador', 'Activate capturer') : tr('Desactivar capturador', 'Deactivate capturer')} secondary onPress={() => onToggle(capturer, 'capturador')} /><Action title={tr('Borrar capturador permanentemente', 'Permanently delete capturer')} danger onPress={() => onDelete(capturer, 'capturador')} /></Card>{detail.current_goal ? <Card title={tr('Meta actual', 'Current goal')}><GoalRow goal={detail.current_goal} /></Card> : null}<Card title={tr('Registros recientes', 'Recent records')}><RecordsList rows={asArray(detail.recent_records)} /></Card></>;
+  return <><Action title={tr('Volver a la lista', 'Back to list')} secondary onPress={onBack} /><View style={styles.stats}><Stat label={tr('Registros', 'Records')} value={detail.total_records || capturer.total_records || recordsTotal || 0} /><Stat label={tr('Hoy', 'Today')} value={capturer.records_today || 0} /><Stat label={tr('Esta semana', 'This week')} value={capturer.records_week || 0} /></View><Card title={tr('Perfil', 'Profile')}><Info label={tr('Nombre', 'Name')} value={capturer.full_name || capturer.placeholder_name} /><Info label={tr('Correo', 'Email')} value={capturer.email} /><Info label={tr('Estado', 'Status')} value={capturer.is_active === false ? tr('Inactivo', 'Inactive') : tr('Activo', 'Active')} /><Action title={capturer.is_active === false ? tr('Activar capturador', 'Activate capturer') : tr('Desactivar capturador', 'Deactivate capturer')} secondary onPress={() => onToggle(capturer, 'capturador')} /><Action title={tr('Borrar capturador permanentemente', 'Permanently delete capturer')} danger onPress={() => onDelete(capturer, 'capturador')} /></Card>{detail.current_goal ? <Card title={tr('Meta actual', 'Current goal')}><GoalRow goal={detail.current_goal} /></Card> : null}{editingRecord ? <RecordEditForm draft={recordEditDraft} setDraft={setRecordEditDraft} busy={recordMutationBusy} onSave={onSaveRecordEdit} onCancel={onCancelRecordEdit} /> : null}<RecordsList rows={records} total={recordsTotal} page={recordsPage} loading={recordsLoading} busy={recordMutationBusy} onPage={onRecordsPage} onEdit={onEditRecord} onDelete={onDeleteRecord} /></>;
 }
 
 function GoalRow({ goal }: { goal: AnyRow }) {
@@ -468,6 +615,7 @@ function Info({ label, value }: { label: string; value?: string | number }) { re
 function Empty({ text }: { text: string }) { return <Text style={styles.empty}>{text}</Text>; }
 function unwrap(result: any): any { return result && typeof result === 'object' && 'data' in result ? result.data : result; }
 function asArray(value: any): AnyRow[] { return Array.isArray(value) ? value : []; }
+function queryString(values: Record<string, string | number>) { return Object.entries(values).filter(([, value]) => value !== '' && value !== null && value !== undefined).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`).join('&'); }
 function initials(value?: string) { return (value || 'GC').split(/\s+/).slice(0, 2).map(part => part[0] || '').join('').toUpperCase(); }
 function roleLabel(role: 'gestor'|'capturador') { return role === 'gestor' ? tr('Gestor', 'Manager') : tr('Capturador', 'Capturer'); }
 function inviteRecipient(name: string | undefined, email: string | undefined, role: 'gestor'|'capturador') { const identity = name?.trim() || roleLabel(role); return email?.trim() ? `${identity} (${email.trim()})` : `${identity} (${tr('sin correo', 'no email')})`; }
@@ -510,7 +658,7 @@ const createStyles = (C: Palette) => StyleSheet.create({
   stats: { flexDirection: 'row', gap: 8 }, stat: { flex: 1, minHeight: 79, backgroundColor: C.surface, borderColor: C.line, borderWidth: 1, borderRadius: 13, padding: 12, justifyContent: 'center' }, statValue: { color: C.accent, fontSize: 21, fontWeight: '800' }, statLabel: { color: C.muted, fontSize: 11, marginTop: 3 },
   personRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 8, borderBottomColor: C.rowLine, borderBottomWidth: 1 }, avatar: { width: 40, height: 40, borderRadius: 13, backgroundColor: C.blueSoft, alignItems: 'center', justifyContent: 'center' }, avatarImage:{width:42,height:42,borderRadius:21}, avatarPending: { backgroundColor: C.pendingBg }, avatarText: { color: C.accent, fontWeight: '800' }, rowMain: { flex: 1, minWidth: 0 }, rowTitle: { color: C.ink, fontWeight: '700', fontSize: 14 }, rowSub: { color: C.muted, fontSize: 12, marginTop: 3 }, rowMeta: { color: C.muted, fontSize: 11, marginTop: 4 }, chevron: { color: C.accent, fontSize: 25, paddingHorizontal: 4 },
   recordRow: { paddingVertical: 11, borderBottomColor: C.rowLine, borderBottomWidth: 1, gap: 3 }, recordTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }, status: { color: C.green, fontSize: 10, fontWeight: '800', backgroundColor: C.successBg, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 99 }, statusOff: { color: C.red, backgroundColor: C.dangerBg }, goalRow: { paddingVertical: 10, borderBottomColor: C.rowLine, borderBottomWidth: 1, gap: 7 }, progress: { height: 7, borderRadius: 99, backgroundColor: C.progressBg, overflow: 'hidden' }, progressFill: { height: '100%', backgroundColor: C.blue2, borderRadius: 99 }, rankRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, gap: 10 }, rankNumber: { width: 25, height: 25, textAlign: 'center', textAlignVertical: 'center', color: C.accent, backgroundColor: C.blueSoft, borderRadius: 8, overflow: 'hidden', fontWeight: '800' }, rankValue: { marginLeft: 'auto', color: C.accent, fontWeight: '800' },
-  input: { backgroundColor: C.surfaceAlt, paddingHorizontal: 13, paddingVertical: 12, borderRadius: 10, borderColor: C.line, borderWidth: 1, color: C.ink, minHeight: 46 }, fieldLabel: { color: C.muted, fontWeight: '700', fontSize: 12 }, choice: { padding: 11, borderRadius: 9, backgroundColor: C.surfaceAlt, borderWidth: 1, borderColor: C.line }, choiceSelected: { backgroundColor: C.blueSoft, borderColor: C.selectedLine }, choiceText: { color: C.ink, fontSize: 13, fontWeight: '600' }, choiceTextSelected: { color: C.accent, fontWeight: '800' }, action: { minHeight: 45, borderRadius: 10, backgroundColor: C.blue, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11, marginTop: 3 }, actionCompact: { flex: 1, minHeight: 38, marginTop: 0, paddingHorizontal: 8, paddingVertical: 8 }, actionText: { color: C.white, fontWeight: '800', textAlign: 'center' }, actionTextCompact: { fontSize: 12 }, actionSecondary: { backgroundColor: C.blueSoft, borderColor: C.selectedLine, borderWidth: 1 }, actionSecondaryText: { color: C.accent }, actionDanger: { backgroundColor: C.dangerBg, borderWidth: 1, borderColor: C.dangerLine }, actionDangerText: { color: C.red }, inviteActions: { flexDirection: 'row', gap: 8, paddingTop: 7 }, linkBox: { backgroundColor: C.blueSoft, borderRadius: 10, borderWidth: 1, borderColor: C.selectedLine, padding: 12, gap: 7 }, link: { color: C.accent, lineHeight: 20 }, error: { color: C.red, backgroundColor: C.dangerBg, borderColor: C.dangerLine, borderWidth: 1, padding: 11, borderRadius: 10, overflow: 'hidden' }, notice: { color: C.green, backgroundColor: C.successBg, borderColor: C.successLine, borderWidth: 1, padding: 11, borderRadius: 10, overflow: 'hidden' }, empty: { color: C.muted, fontSize: 13, paddingVertical: 8 }, infoRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 6, borderBottomColor: C.rowLine, borderBottomWidth: 1 }, infoLabel: { color: C.muted, fontSize: 12 }, infoValue: { color: C.ink, fontSize: 12, fontWeight: '700', flexShrink: 1, textAlign: 'right' }
+  input: { backgroundColor: C.surfaceAlt, paddingHorizontal: 13, paddingVertical: 12, borderRadius: 10, borderColor: C.line, borderWidth: 1, color: C.ink, minHeight: 46 }, fieldLabel: { color: C.muted, fontWeight: '700', fontSize: 12 }, choice: { padding: 11, borderRadius: 9, backgroundColor: C.surfaceAlt, borderWidth: 1, borderColor: C.line }, choiceSelected: { backgroundColor: C.blueSoft, borderColor: C.selectedLine }, choiceText: { color: C.ink, fontSize: 13, fontWeight: '600' }, choiceTextSelected: { color: C.accent, fontWeight: '800' }, action: { minHeight: 45, borderRadius: 10, backgroundColor: C.blue, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11, marginTop: 3 }, actionCompact: { flex: 1, minHeight: 38, marginTop: 0, paddingHorizontal: 8, paddingVertical: 8 }, actionText: { color: C.white, fontWeight: '800', textAlign: 'center' }, actionTextCompact: { fontSize: 12 }, actionSecondary: { backgroundColor: C.blueSoft, borderColor: C.selectedLine, borderWidth: 1 }, actionSecondaryText: { color: C.accent }, actionDanger: { backgroundColor: C.dangerBg, borderWidth: 1, borderColor: C.dangerLine }, actionDangerText: { color: C.red }, inviteActions: { flexDirection: 'row', gap: 8, paddingTop: 7 }, recordActions: { flexDirection: 'row', gap: 8, paddingTop: 8 }, pagination: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingTop: 10 }, pageButton: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 9, borderWidth: 1, borderColor: C.selectedLine, backgroundColor: C.blueSoft, paddingHorizontal: 8 }, pageButtonDisabled: { opacity: 0.42 }, pageButtonText: { color: C.accent, fontWeight: '800', fontSize: 12 }, pageSummary: { color: C.muted, fontWeight: '700', fontSize: 11, textAlign: 'center' }, filterPair: { flexDirection: 'row', gap: 8 }, filterField: { flex: 1, gap: 5 }, linkBox: { backgroundColor: C.blueSoft, borderRadius: 10, borderWidth: 1, borderColor: C.selectedLine, padding: 12, gap: 7 }, link: { color: C.accent, lineHeight: 20 }, error: { color: C.red, backgroundColor: C.dangerBg, borderColor: C.dangerLine, borderWidth: 1, padding: 11, borderRadius: 10, overflow: 'hidden' }, notice: { color: C.green, backgroundColor: C.successBg, borderColor: C.successLine, borderWidth: 1, padding: 11, borderRadius: 10, overflow: 'hidden' }, empty: { color: C.muted, fontSize: 13, paddingVertical: 8 }, infoRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 6, borderBottomColor: C.rowLine, borderBottomWidth: 1 }, infoLabel: { color: C.muted, fontSize: 12 }, infoValue: { color: C.ink, fontSize: 12, fontWeight: '700', flexShrink: 1, textAlign: 'right' }
 });
 const STYLE_CACHE = { light: createStyles(LIGHT_COLORS), dark: createStyles(DARK_COLORS) };
 let styles = STYLE_CACHE.light;

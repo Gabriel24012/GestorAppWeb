@@ -436,8 +436,6 @@ class RecordDetailView(DocumentedAPIView):
 
     def patch(self, request, record_id):
         record = self.get_object(request, record_id)
-        if request.user.role == User.Role.MANAGER:
-            raise PermissionDenied("El gestor solo puede consultar los registros de su equipo.")
         serializer = RecordSerializer(record, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
         record = serializer.save()
@@ -446,9 +444,7 @@ class RecordDetailView(DocumentedAPIView):
 
     def delete(self, request, record_id):
         record = self.get_object(request, record_id)
-        if request.user.role == User.Role.MANAGER:
-            raise PermissionDenied("No puedes eliminar registros.")
-        if request.user.role == User.Role.ADMIN:
+        if request.user.role in (User.Role.ADMIN, User.Role.MANAGER):
             record.status = Record.Status.VOIDED
             record.save(update_fields=["status", "updated_at"])
         else:
