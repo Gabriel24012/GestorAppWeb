@@ -227,19 +227,22 @@ export default function App() {
     } catch (e) { setError(message(e)); }
   }
 
-  async function loadRecordsPage(page: number, filters: RecordFilters = appliedRecordFilters) {
+  async function loadRecordsPage(page: number, filters: RecordFilters = appliedRecordFilters, refreshCapturers = false) {
     if (!profile) return;
     setLoading(true); setError(''); setDetail(null); setEditingRecord(null);
     try {
       const path = profile.role === 'admin' ? '/admin/records' : profile.role === 'gestor' ? '/manager/records' : '/records';
       const query = queryString({ ...filters, status: 'active', page, limit: DETAIL_RECORDS_LIMIT });
-      const requests: Promise<any>[] = [api<ApiEnvelope<AnyRow[]>>(`${path}?${query}`)];
-      if (profile.role === 'gestor' && !recordCapturers.length) requests.push(api<any>('/manager/capturers'));
-      const [result, capturersResult] = await Promise.all(requests);
+      const result = await api<ApiEnvelope<AnyRow[]>>(`${path}?${query}`);
       setPayload(result);
       setRecordsPage(result.meta?.page || page);
       setRecordsTotal(result.meta?.total ?? asArray(result.data).length);
-      if (capturersResult) setRecordCapturers(asArray(unwrap(capturersResult)).filter(row => row.kind !== 'invite'));
+      if (profile.role !== 'capturador' && (refreshCapturers || !recordCapturers.length)) {
+        try {
+          const members = await api<any>(profile.role === 'admin' ? '/capturadores' : '/manager/capturers');
+          setRecordCapturers(asArray(unwrap(members)).filter(row => row.kind !== 'invite'));
+        } catch (e) { setError(message(e)); }
+      }
     } catch (e) { setError(message(e)); }
     finally { setLoading(false); }
   }
@@ -271,7 +274,9 @@ export default function App() {
     try {
       const result = await api<{data: {managers: number; capturers: number; records: number}}>('/admin/demo-data', { method: 'POST', body: JSON.stringify({}) });
       setNotice(currentLanguage === 'en' ? `Demo inserted: ${result.data.managers} managers, ${result.data.capturers} capturers, and ${result.data.records} records.` : `Demo insertada: ${result.data.managers} gestores, ${result.data.capturers} capturadores y ${result.data.records} registros.`);
-      await loadRecordsPage(1, EMPTY_RECORD_FILTERS);
+      setRecordFilters(EMPTY_RECORD_FILTERS);
+      setAppliedRecordFilters(EMPTY_RECORD_FILTERS);
+      await loadRecordsPage(1, EMPTY_RECORD_FILTERS, true);
     } catch (e) { setError(message(e)); }
     finally { setDemoDataBusy(false); }
   }
@@ -288,7 +293,9 @@ export default function App() {
     try {
       const result = await api<{data: {managers: number; capturers: number; records: number}}>('/admin/demo-data', { method: 'DELETE' });
       setNotice(currentLanguage === 'en' ? `Demo deleted: ${result.data.managers} managers, ${result.data.capturers} capturers, and ${result.data.records} records.` : `Demo eliminada: ${result.data.managers} gestores, ${result.data.capturers} capturadores y ${result.data.records} registros.`);
-      await loadRecordsPage(1, EMPTY_RECORD_FILTERS);
+      setRecordFilters(EMPTY_RECORD_FILTERS);
+      setAppliedRecordFilters(EMPTY_RECORD_FILTERS);
+      await loadRecordsPage(1, EMPTY_RECORD_FILTERS, true);
     } catch (e) { setError(message(e)); }
     finally { setDemoDataBusy(false); }
   }
@@ -357,6 +364,9 @@ export default function App() {
       const admin = profile?.role === 'admin';
       const path = admin ? '/admin/manager-goals' : '/manager/goals';
       const targetId = admin ? managerId : goalCapturerId;
+      if (admin && !targetId) throw new Error(tr('Selecciona el gestor que recibirá la meta.', 'Select the manager who will receive the goal.'));
+      if (!/^[1-9]\d*$/.test(goalTarget.trim())) throw new Error(tr('Escribe una cantidad entera mayor que cero.', 'Enter a whole number greater than zero.'));
+      if (goalEnd < goalStart) throw new Error(tr('La fecha de fin debe ser igual o posterior a la de inicio.', 'The end date must be on or after the start date.'));
       await api(path, { method: 'POST', body: JSON.stringify({ ...(admin ? { manager_id: targetId } : { capturer_id: targetId || null }), period_type: 'weekly', target_count: Number(goalTarget), starts_on: goalStart, ends_on: goalEnd }) });
       Alert.alert(tr('Meta creada', 'Goal created'), tr('La meta quedó registrada.', 'The goal was saved.')); await loadSection();
     } catch (e) { setError(message(e)); }
@@ -531,7 +541,7 @@ export default function App() {
         {section === 'Registros' ? <>
           {profile.role === 'capturador' ? <RecordForm draft={recordDraft} setDraft={setRecordDraft} onSubmit={() => void submitRecord()} /> : null}
           {profile.role === 'admin' ? <Card title={tr('Datos demo', 'Demo data')} subtitle={tr('Crea 5 gestores, 5 capturadores por gestor y 20 registros completos por capturador.', 'Create 5 managers, 5 capturers per manager, and 20 complete records per capturer.')}><Action title={demoDataBusy ? tr('Procesando…', 'Processing…') : tr('Insertar demo', 'Insert demo')} disabled={demoDataBusy} onPress={confirmCreateDemoData} /><Action title={tr('Eliminar demo', 'Delete demo')} disabled={demoDataBusy} danger onPress={confirmDeleteDemoData} /></Card> : null}
-          {profile.role === 'gestor' ? <RecordsFilterCard filters={recordFilters} setFilters={setRecordFilters} capturers={recordCapturers} onApply={applyRecordsFilter} onClear={clearRecordsFilter} /> : null}
+          {profile.role !== 'capturador' ? <RecordsFilterCard filters={recordFilters} setFilters={setRecordFilters} capturers={recordCapturers} onApply={applyRecordsFilter} onClear={clearRecordsFilter} /> : null}
           {editingRecord ? <RecordEditForm draft={recordEditDraft} setDraft={setRecordEditDraft} busy={recordMutationBusy} onSave={() => void saveRecordEdit()} onCancel={() => setEditingRecord(null)} /> : null}
           <RecordsList rows={asArray(data)} total={recordsTotal} page={recordsPage} busy={recordMutationBusy} onPage={page => void loadRecordsPage(page, appliedRecordFilters)} onEdit={beginRecordEdit} onDelete={confirmDeleteRecord} onToggleFavorite={profile.role === 'capturador' ? row => void toggleRecordFavorite(row) : undefined} />
         </> : null}
@@ -585,8 +595,8 @@ function AdminTeam({ managers, capturers, onOpenManager, onOpenCapturer, onFavor
 function RecordsList({ rows, total, page, limit = DETAIL_RECORDS_LIMIT, loading = false, busy = false, onPage, onEdit, onDelete, onToggleFavorite }: { rows: AnyRow[]; total?: number; page?: number; limit?: number; loading?: boolean; busy?: boolean; onPage?: (page: number) => void; onEdit?: (row: AnyRow) => void; onDelete?: (row: AnyRow) => void; onToggleFavorite?: (row: AnyRow) => void }) {
   const pages = Math.max(1, Math.ceil((total ?? rows.length) / limit));
   return <Card title={tr('Registros recientes', 'Recent records')} subtitle={currentLanguage === 'en' ? `${total ?? rows.length} total` : `${total ?? rows.length} en total`}>
-    {loading ? <ActivityIndicator color={C.accent} style={{ marginVertical: 18 }} /> : rows.length ? rows.map((row, i) => <View key={row.id || i} style={styles.recordRow}><View style={styles.recordTop}><Text style={[styles.rowTitle, styles.recordTitle]}>{[row.first_name, row.paternal_surname, row.maternal_surname].filter(Boolean).join(' ') || tr('Registro', 'Record')}</Text><View style={styles.recordStatusActions}>{onToggleFavorite ? <HeartButton active={Boolean(row.is_favorite)} onPress={() => onToggleFavorite(row)} /> : null}<Text style={[styles.status, row.status === 'voided' && styles.statusOff]}>{row.status === 'voided' ? tr('Anulado', 'Voided') : tr('Activo', 'Active')}</Text></View></View><Text style={styles.rowSub}>{row.capturer?.full_name ? `${row.capturer.full_name} · ` : ''}{row.phone || tr('Sin teléfono', 'No phone')}</Text><Text style={styles.rowMeta}>{tr('Clave electoral', 'Voter ID key')}: {row.electoral_key || '—'}</Text><Text style={styles.rowMeta}>{row.address || tr('Sin domicilio', 'No address')} {row.exterior_number ? `#${row.exterior_number}` : ''}</Text><Text style={styles.rowMeta}>{row.neighborhood || tr('Sin colonia', 'No neighborhood')} · {row.district || tr('Sin distrito', 'No district')} · {row.postal_code || tr('Sin C.P.', 'No postal code')}</Text><Text style={styles.rowMeta}>{formatDate(row.created_at)} · {row.observations || tr('Sin observaciones', 'No notes')}</Text>{onEdit || onDelete ? <View style={styles.recordActions}>{onEdit ? <Action compact secondary disabled={busy} title={tr('Modificar', 'Edit')} onPress={() => onEdit(row)} /> : null}{onDelete ? <Action compact danger disabled={busy} title={tr('Eliminar', 'Delete')} onPress={() => onDelete(row)} /> : null}</View> : null}</View>) : <Empty text={tr('Aún no hay registros para mostrar.', 'There are no records to display yet.')} />}
     {page && pages > 1 ? <View style={styles.pagination}><Pressable disabled={page <= 1 || loading} onPress={() => onPage?.(page - 1)} style={[styles.pageButton, (page <= 1 || loading) && styles.pageButtonDisabled]}><Text style={styles.pageButtonText}>{tr('Anterior', 'Previous')}</Text></Pressable><Text style={styles.pageSummary}>{tr('Página', 'Page')} {page} {tr('de', 'of')} {pages}</Text><Pressable disabled={page >= pages || loading} onPress={() => onPage?.(page + 1)} style={[styles.pageButton, (page >= pages || loading) && styles.pageButtonDisabled]}><Text style={styles.pageButtonText}>{tr('Siguiente', 'Next')}</Text></Pressable></View> : null}
+    {loading ? <ActivityIndicator color={C.accent} style={{ marginVertical: 18 }} /> : rows.length ? rows.map((row, i) => <View key={row.id || i} style={styles.recordRow}><View style={styles.recordTop}><Text style={[styles.rowTitle, styles.recordTitle]}>{[row.first_name, row.paternal_surname, row.maternal_surname].filter(Boolean).join(' ') || tr('Registro', 'Record')}</Text><View style={styles.recordStatusActions}>{onToggleFavorite ? <HeartButton active={Boolean(row.is_favorite)} onPress={() => onToggleFavorite(row)} /> : null}<Text style={[styles.status, row.status === 'voided' && styles.statusOff]}>{row.status === 'voided' ? tr('Anulado', 'Voided') : tr('Activo', 'Active')}</Text></View></View><Text style={styles.rowSub}>{row.capturer?.full_name ? `${row.capturer.full_name} · ` : ''}{row.phone || tr('Sin teléfono', 'No phone')}</Text><Text style={styles.rowMeta}>{tr('Clave electoral', 'Voter ID key')}: {row.electoral_key || '—'}</Text><Text style={styles.rowMeta}>{row.address || tr('Sin domicilio', 'No address')} {row.exterior_number ? `#${row.exterior_number}` : ''}</Text><Text style={styles.rowMeta}>{row.neighborhood || tr('Sin colonia', 'No neighborhood')} · {row.district || tr('Sin distrito', 'No district')} · {row.postal_code || tr('Sin C.P.', 'No postal code')}</Text><Text style={styles.rowMeta}>{formatDate(row.created_at)} · {row.observations || tr('Sin observaciones', 'No notes')}</Text>{onEdit || onDelete ? <View style={styles.recordActions}>{onEdit ? <Action compact secondary disabled={busy} title={tr('Modificar', 'Edit')} onPress={() => onEdit(row)} /> : null}{onDelete ? <Action compact danger disabled={busy} title={tr('Eliminar', 'Delete')} onPress={() => onDelete(row)} /> : null}</View> : null}</View>) : <Empty text={tr('Aún no hay registros para mostrar.', 'There are no records to display yet.')} />}
   </Card>;
 }
 
@@ -624,13 +634,53 @@ function RecordForm({ draft, setDraft, onSubmit }: { draft: Record<string, strin
   </Card>;
 }
 
+function GoalDateField({label, value, onSelect}: {label: string; value: string; onSelect: (date: string) => void}) {
+  const [month, setMonth] = useState<Date | null>(null);
+  const locale = currentLanguage === 'en' ? 'en-US' : 'es-MX';
+  const selected = new Date(`${value}T12:00:00`);
+  const formatted = selected.toLocaleDateString(locale, {dateStyle: 'long'});
+  const year = month?.getFullYear() ?? 0;
+  const index = month?.getMonth() ?? 0;
+  const offset = (new Date(year, index, 1).getDay() + 6) % 7;
+  const days = new Date(year, index + 1, 0).getDate();
+  const cells = offset + days;
+  return <View style={{gap: 6}}>
+    <Text style={styles.fieldLabel}>{label}</Text>
+    <Action secondary title={formatted} onPress={() => setMonth(month ? null : selected)} />
+    {month ? <View style={{gap: 6}}>
+      <Text style={styles.rowTitle}>{month.toLocaleDateString(locale, {month: 'long', year: 'numeric'})}</Text>
+      <View style={styles.recordActions}>
+        <Action compact secondary title={tr('Mes anterior', 'Previous month')} onPress={() => setMonth(new Date(year, index - 1, 1))} />
+        <Action compact secondary title={tr('Mes siguiente', 'Next month')} onPress={() => setMonth(new Date(year, index + 1, 1))} />
+      </View>
+      <View style={{flexDirection: 'row'}}>
+        {Array.from({length: 7}, (_, i) => <Text key={i} style={[styles.fieldLabel, {flex: 1, textAlign: 'center'}]}>{new Date(2024, 0, i + 1).toLocaleDateString(locale, {weekday: 'short'})}</Text>)}
+      </View>
+      {Array.from({length: Math.ceil(cells / 7)}, (_, week) => <View key={week} style={{flexDirection: 'row'}}>
+        {Array.from({length: 7}, (_, col) => {
+          const day = week * 7 + col - offset + 1;
+          if (day < 1 || day > days) return <View key={col} style={{flex: 1}} />;
+          const date = `${year}-${String(index + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          return <Pressable key={col} accessibilityRole="button" accessibilityState={{selected: date === value}} accessibilityLabel={new Date(year, index, day).toLocaleDateString(locale, {dateStyle: 'long'})} style={[date === value && styles.choiceSelected, {flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 40}]} onPress={() => { onSelect(date); setMonth(null); }}>
+            <Text style={styles.rowTitle}>{day}</Text>
+          </Pressable>;
+        })}
+      </View>)}
+    </View> : null}
+  </View>;
+}
+
 function GoalsView(props: any) {
   const goals = [...asArray(props.data?.goals?.active), ...asArray(props.data?.goals?.history)];
   const managers = props.role === 'admin' ? asArray(props.data?.managers) : [];
   const capturers = props.role === 'gestor' ? asArray(props.data?.capturers).filter((row: AnyRow) => row.kind !== 'invite') : [];
   return <><Card title={tr('Metas', 'Goals')} subtitle={tr('Avance de metas activas', 'Active goal progress')}>{goals.length ? goals.map((goal, i) => <GoalRow key={goal.id || i} goal={goal} />) : <Empty text={tr('No hay metas activas.', 'There are no active goals.')} />}</Card><Card title={tr('Crear meta', 'Create goal')} subtitle={props.role === 'admin' ? tr('Asignada a un gestor.', 'Assigned to a manager.') : tr('Para todo tu equipo o un capturador.', 'For your whole team or one capturer.')}>
     {props.role === 'admin' ? <><Text style={styles.fieldLabel}>{tr('Gestor', 'Manager')}</Text><ChoiceList rows={managers} value={props.managerId} onSelect={props.setManagerId} placeholder={tr('Selecciona gestor', 'Select a manager')} /></> : <><Text style={styles.fieldLabel}>{tr('Alcance', 'Scope')}</Text><Action title={tr('Todo el equipo', 'Entire team')} secondary onPress={() => props.setGoalCapturerId('')} />{capturers.map((row: AnyRow) => <Choice key={row.id} label={row.full_name} selected={props.goalCapturerId === row.id} onPress={() => props.setGoalCapturerId(row.id)} />)}</>}
-    <TextInput style={styles.input} placeholder={tr('Objetivo de registros', 'Record target')} keyboardType="numeric" value={props.goalTarget} onChangeText={props.setGoalTarget} /><TextInput style={styles.input} placeholder={tr('Inicio (AAAA-MM-DD)', 'Start (YYYY-MM-DD)')} value={props.goalStart} onChangeText={props.setGoalStart} /><TextInput style={styles.input} placeholder={tr('Fin (AAAA-MM-DD)', 'End (YYYY-MM-DD)')} value={props.goalEnd} onChangeText={props.setGoalEnd} /><Action title={tr('Crear meta semanal', 'Create weekly goal')} onPress={props.onCreate} />
+    <Text style={styles.fieldLabel}>{tr('Cantidad de registros que se deben capturar', 'Number of records to capture')}</Text>
+    <TextInput style={styles.input} placeholder={tr('Ejemplo: 20', 'Example: 20')} keyboardType="number-pad" value={props.goalTarget} onChangeText={props.setGoalTarget} />
+    <GoalDateField label={tr('Fecha de inicio de la meta', 'Goal start date')} value={props.goalStart} onSelect={props.setGoalStart} />
+    <GoalDateField label={tr('Fecha límite de la meta', 'Goal due date')} value={props.goalEnd} onSelect={props.setGoalEnd} />
+    <Action title={tr('Crear meta semanal', 'Create weekly goal')} onPress={props.onCreate} />
   </Card></>;
 }
 

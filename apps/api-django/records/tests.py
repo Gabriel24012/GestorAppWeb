@@ -170,9 +170,18 @@ class AdminDemoDataTests(APITestCase):
         self.assertEqual(filtered.status_code, 200)
         self.assertEqual(filtered.data["meta"]["total"], 100)
 
+        regular_capturer = User.objects.create_user(email="regular-capturer@example.test", role=User.Role.CAPTURER, parent_user=self.manager)
+        legacy = Record.objects.create(
+            capturer=regular_capturer, manager=self.manager, leadership_name=self.manager.full_name,
+            first_name="Demo1", paternal_surname="Prueba", address="Domicilio de demostración",
+            birth_date=date(1990, 1, 1), phone="5500000999", electoral_key="LEGACY000000000001",
+            observations="[DEMO-GESTOR] Registro sintético de prueba.",
+        )
         deleted = self.client.delete("/api/v1/admin/demo-data")
         self.assertEqual(deleted.status_code, 200)
-        self.assertEqual({key: deleted.data["data"][key] for key in ("managers", "capturers", "records")}, {"managers": 5, "capturers": 25, "records": 500})
+        self.assertEqual({key: deleted.data["data"][key] for key in ("managers", "capturers", "records")}, {"managers": 5, "capturers": 25, "records": 501})
+        self.assertFalse(Record.objects.filter(pk=legacy.pk).exists())
+        self.assertTrue(User.objects.filter(pk=regular_capturer.pk).exists())
         self.assertFalse(User.objects.filter(email__endswith="@demo.gestorapp.local").exists())
         self.assertTrue(User.objects.filter(pk=self.manager.pk).exists())
 

@@ -611,9 +611,11 @@ td {
   padding-bottom: .5rem;
 }
 .records-table {
-  min-width: 1180px;
-  table-layout: fixed;
+  min-width: 100%;
+  width: max-content;
+  table-layout: auto;
 }
+.records-table th, .records-table td { padding: .45rem .6rem; }
 .records-table th {
   white-space: nowrap;
   font-size: .82rem;
@@ -652,6 +654,12 @@ td {
 .records-table td:nth-child(10) { width: 6.5rem; }
 .records-table th:nth-child(11),
 .records-table td:nth-child(11) { width: 12rem; }
+.records-table td:nth-child(6),
+.records-table td:nth-child(11) {
+  min-width: 10rem;
+  max-width: 16rem;
+  white-space: normal;
+}
 .goal-form {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }

@@ -774,12 +774,15 @@ class AdminDemoDataView(DocumentedAPIView):
     marker = "[DEMO-ADMIN]"
     email_suffix = "@demo.gestorapp.local"
 
-    def delete_existing(self):
+    def delete_existing(self, *, include_legacy=False):
         managers = User.objects.filter(role=User.Role.MANAGER, email__endswith=self.email_suffix)
         manager_ids = list(managers.values_list("id", flat=True))
         capturers = User.objects.filter(role=User.Role.CAPTURER, parent_user_id__in=manager_ids)
         capturer_ids = list(capturers.values_list("id", flat=True))
-        records = Record.objects.filter(Q(manager_id__in=manager_ids) | Q(observations__contains=self.marker))
+        demo_records = Q(manager_id__in=manager_ids) | Q(observations__startswith=self.marker)
+        if include_legacy:
+            demo_records |= Q(observations="[DEMO-GESTOR] Registro sintético de prueba.")
+        records = Record.objects.filter(demo_records)
         counts = {"managers": len(manager_ids), "capturers": len(capturer_ids), "records": records.count()}
         RecordVersion.objects.filter(record__in=records).delete()
         records.delete()
@@ -863,7 +866,7 @@ class AdminDemoDataView(DocumentedAPIView):
     def delete(self, request):
         if not getattr(settings, "ENABLE_DEMO_DATA", False):
             raise PermissionDenied("Los datos demo están desactivados.")
-        deleted = self.delete_existing()
+        deleted = self.delete_existing(include_legacy=True)
         audit(request.user, "demo_data", None, "delete_admin_demo_data", deleted)
         return Response({"data": {**deleted, "marker": self.marker}})
 
