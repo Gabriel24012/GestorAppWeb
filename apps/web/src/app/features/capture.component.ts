@@ -103,11 +103,10 @@ import { apiErrorMessage } from '../core/api-errors';
 
         <div class="record-list">
           @for (record of records(); track record.id) {
-            <button type="button" class="record-row" [class.active]="editingRecord()?.id === record.id" (click)="editRecord(record)">
-              <strong>{{record.first_name}} {{record.paternal_surname}}</strong>
-              <span>{{record.phone}}</span>
-              <small>{{record.electoral_key}}</small>
-            </button>
+            <div class="record-row" [class.active]="editingRecord()?.id === record.id" role="button" tabindex="0" (click)="editRecord(record)" (keydown.enter)="editRecord(record)">
+              <div class="record-row-copy"><strong>{{record.first_name}} {{record.paternal_surname}}</strong><span>{{record.phone}}</span><small>{{record.electoral_key}}</small></div>
+              <button type="button" class="favorite-button" [class.active]="record['is_favorite']" [attr.aria-label]="record['is_favorite'] ? 'Quitar registro de favoritos' : 'Agregar registro a favoritos'" (click)="toggleFavorite($event, record)">{{record['is_favorite'] ? '♥' : '♡'}}</button>
+            </div>
           } @empty {
             <p>No se encontraron registros.</p>
           }
@@ -255,6 +254,15 @@ export class CaptureComponent implements OnInit {
       observations: this.stringValue(record['observations'])
     });
     this.recordForm.markAsPristine();
+  }
+
+  toggleFavorite(event: Event, record: RecordItem) {
+    event.stopPropagation();
+    this.error.set('');
+    this.api.post<{data: {is_favorite: boolean}}>(`/favorites/records/${record.id}`, {}).subscribe({
+      next: () => this.loadRecords(),
+      error: (e) => this.error.set(apiErrorMessage(e))
+    });
   }
 
   newRecord() {

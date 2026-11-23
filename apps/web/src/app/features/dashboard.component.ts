@@ -15,6 +15,7 @@ interface AdminManagerRow {
   full_name: string;
   profile_image?: string;
   is_active: boolean;
+  is_favorite: boolean;
   total_capturadores: number;
   capturadores_activos: number;
   total_records: number;
@@ -54,7 +55,7 @@ interface AdminGoal {
           <tbody>
             @for(manager of managers(); track manager.id) {
               <tr>
-                <td><div class="member-identity">@if(manager.profile_image) {<img class="member-avatar" [src]="manager.profile_image" [alt]="'Foto de ' + manager.full_name">} @else {<span class="member-avatar-fallback">{{initials(manager.full_name)}}</span>}<div><strong>{{manager.full_name}}</strong><br><small class="muted">{{manager.email}}</small></div></div></td>
+                <td><div class="member-identity"><button type="button" class="favorite-button" [class.active]="manager.is_favorite" [attr.aria-label]="manager.is_favorite ? 'Quitar gestor de favoritos' : 'Agregar gestor a favoritos'" (click)="toggleFavorite(manager)">{{manager.is_favorite ? '♥' : '♡'}}</button>@if(manager.profile_image) {<img class="member-avatar" [src]="manager.profile_image" [alt]="'Foto de ' + manager.full_name">} @else {<span class="member-avatar-fallback">{{initials(manager.full_name)}}</span>}<div><strong>{{manager.full_name}}</strong><br><small class="muted">{{manager.email}}</small></div></div></td>
                 <td>{{manager.capturadores_activos}} / {{manager.total_capturadores}}</td>
                 <td>{{manager.total_records}}</td>
                 <td>
@@ -86,6 +87,15 @@ export class AdminDashboardComponent implements OnInit {
   barWidth(value: number) { return Math.min(value, 100); }
   dateTimeText(value: unknown) { return formatDateTimeText(value); }
   initials(name: string) { return name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase() || '?'; }
+  toggleFavorite(manager: AdminManagerRow) {
+    this.error.set('');
+    this.api.post<{data: {is_favorite: boolean}}>(`/favorites/profiles/${manager.id}`, {}).subscribe({
+      next: ({data}) => this.managers.update(rows => rows
+        .map(row => row.id === manager.id ? { ...row, is_favorite: data.is_favorite } : row)
+        .sort((a, b) => Number(b.is_favorite) - Number(a.is_favorite))),
+      error: (e) => this.error.set(apiErrorMessage(e))
+    });
+  }
   deleteManager(manager: AdminManagerRow) {
     if (!window.confirm(`¿Borrar permanentemente al gestor ${manager.full_name}? La acción no se puede deshacer. Si tiene miembros o registros asociados, el servidor impedirá el borrado y explicará por qué.`)) return;
     this.error.set('');

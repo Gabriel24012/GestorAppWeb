@@ -1,4 +1,5 @@
 from django.urls import path
+from rest_framework.routers import SimpleRouter
 
 from .views import (
     AdminManagerDetailView,
@@ -12,6 +13,7 @@ from .views import (
     DashboardView,
     AdminDemoDataView,
     ExportsView,
+    FavoriteViewSet,
     FilterOptionsView,
     GoalDetailView,
     GoalListCreateView,
@@ -35,6 +37,9 @@ from .views import (
     PreferencesView,
     ProfileImageView,
 )
+
+router = SimpleRouter(trailing_slash=False)
+router.register("favorites", FavoriteViewSet, basename="favorites")
 
 urlpatterns = [
     path("auth/token", LoginView.as_view(), name="token_obtain_pair"),
@@ -83,4 +88,4 @@ urlpatterns = [
     path("manager/record-filter-options", FilterOptionsView.as_view(), name="manager_record_filter_options"),
     path("manager/records", ManagerRecordsView.as_view(), name="manager_records"),
     path("exports/records", ExportsView.as_view(), name="record_exports"),
-]
+] + router.urls

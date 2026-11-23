@@ -24,9 +24,11 @@ class UserPreferenceSerializer(serializers.ModelSerializer):
 
 
 class ProfileBriefSerializer(serializers.ModelSerializer):
+    is_favorite = serializers.BooleanField(read_only=True, default=False)
+
     class Meta:
         model = User
-        fields = ("id", "full_name", "email", "role", "is_active", "email_verified", "profile_image")
+        fields = ("id", "full_name", "email", "role", "is_active", "email_verified", "profile_image", "is_favorite")
         read_only_fields = fields
 
 
@@ -34,10 +36,11 @@ class ProfileSerializer(serializers.ModelSerializer):
     parent = ProfileBriefSerializer(source="parent_user", read_only=True)
     parent_user_id = serializers.UUIDField(read_only=True)
     children = ProfileBriefSerializer(many=True, read_only=True)
+    is_favorite = serializers.BooleanField(read_only=True, default=False)
 
     class Meta:
         model = User
-        fields = ("id", "email", "full_name", "role", "parent", "parent_user_id", "children", "is_active", "email_verified", "email_verified_at", "profile_image", "onboarding_completed_at", "created_at")
+        fields = ("id", "email", "full_name", "role", "parent", "parent_user_id", "children", "is_active", "email_verified", "email_verified_at", "profile_image", "onboarding_completed_at", "created_at", "is_favorite")
         read_only_fields = ("id", "role", "email_verified", "email_verified_at", "profile_image", "onboarding_completed_at", "created_at")
 
     def validate(self, attrs):
@@ -85,10 +88,11 @@ class RecordSerializer(serializers.ModelSerializer):
     capture_session_id = serializers.PrimaryKeyRelatedField(source="capture_session", queryset=CaptureSession.objects.all(), required=False, allow_null=True)
     capturer_id = serializers.UUIDField(read_only=True)
     manager_id = serializers.UUIDField(read_only=True)
+    is_favorite = serializers.BooleanField(read_only=True, default=False)
 
     class Meta:
         model = Record
-        fields = ("id", "capture_session", "capture_session_id", "capturer", "capturer_id", "manager", "manager_id", "leadership_name", "section_code", "network_responsible", "first_name", "paternal_surname", "maternal_surname", "address", "exterior_number", "neighborhood", "district", "postal_code", "birth_date", "phone", "electoral_key", "observations", "status", "created_at", "updated_at", "versions")
+        fields = ("id", "capture_session", "capture_session_id", "capturer", "capturer_id", "manager", "manager_id", "leadership_name", "section_code", "network_responsible", "first_name", "paternal_surname", "maternal_surname", "address", "exterior_number", "neighborhood", "district", "postal_code", "birth_date", "phone", "electoral_key", "observations", "status", "created_at", "updated_at", "versions", "is_favorite")
         read_only_fields = ("id", "capturer", "manager", "created_at", "updated_at", "versions")
 
     def validate_birth_date(self, value):

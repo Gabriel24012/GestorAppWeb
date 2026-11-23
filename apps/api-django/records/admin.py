@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
-from .models import AuditEvent, CaptureSession, Goal, Invitation, Record, RecordVersion, User
+from .models import AuditEvent, CaptureSession, Goal, Invitation, ProfileFavorite, Record, RecordFavorite, RecordVersion, User
 
 
 @admin.register(User)
@@ -21,5 +21,5 @@ class UserAdmin(BaseUserAdmin):
     readonly_fields = ("created_at", "updated_at")
 
 
-for model in (CaptureSession, Record, RecordVersion, Goal, Invitation, AuditEvent):
+for model in (CaptureSession, Record, RecordVersion, Goal, Invitation, AuditEvent, ProfileFavorite, RecordFavorite):
     admin.site.register(model)

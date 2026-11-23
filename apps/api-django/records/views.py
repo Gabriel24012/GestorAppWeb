@@ -13,15 +13,15 @@ from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Exists, Max, OuterRef, Q
 from django.http import HttpResponse
 from django.utils import timezone
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.utils.dateparse import parse_date
 from openpyxl import Workbook
-from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework import status, viewsets
+from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError, AuthenticationFailed
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -31,7 +31,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from drf_spectacular.utils import extend_schema_view, extend_schema
 
-from .models import AuditEvent, CaptureSession, EmailVerification, Goal, Invitation, Record, RecordVersion, User, UserPreference
+from .models import AuditEvent, CaptureSession, EmailVerification, Goal, Invitation, ProfileFavorite, Record, RecordFavorite, RecordVersion, User, UserPreference
 from .pagination import StandardPagination
 from .permissions import HasRole, IsBootstrapRequest
 from .serializers import APIEnvelopeSerializer, AccountInviteSerializer, CaptureSessionSerializer, GoalSerializer, InvitationSerializer, InviteCompletionSerializer, LoginTokenSerializer, ProfileBriefSerializer, ProfileSerializer, RecordSerializer, UserPreferenceSerializer, VerifiedTokenRefreshSerializer
@@ -46,6 +46,10 @@ class AuthThrottle(AnonRateThrottle):
 
 class DocumentedAPIView(APIView):
     serializer_class = APIEnvelopeSerializer
+
+
+def with_profile_favorite(queryset, owner):
+    return queryset.annotate(is_favorite=Exists(ProfileFavorite.objects.filter(owner=owner, target_id=OuterRef("pk")))).order_by("-is_favorite", "full_name", "email")
 
 
 class LoginView(TokenObtainPairView):
@@ -258,6 +262,8 @@ class ProfileListCreateView(DocumentedAPIView):
     def get(self, request):
         role = request.query_params.get("role", User.Role.MANAGER)
         qs = User.objects.filter(role=role).select_related("parent_user").prefetch_related("children")
+        if role == User.Role.MANAGER:
+            qs = with_profile_favorite(qs, request.user)
         rows = [{**row, "kind": "profile", "status_label": "Activo" if row["is_active"] else "Inactivo"} for row in ProfileSerializer(qs, many=True).data]
         kind = Invitation.Kind.MANAGER if role == User.Role.MANAGER else Invitation.Kind.CAPTURER
         invites = Invitation.objects.filter(kind=kind, status=Invitation.Status.PENDING)
@@ -323,6 +329,40 @@ class ProfileDetailView(DocumentedAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class FavoriteViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated, HasRole]
+    allowed_roles = [User.Role.ADMIN, User.Role.MANAGER, User.Role.CAPTURER]
+
+    @action(detail=False, methods=["post"], url_path=r"profiles/(?P<user_id>[^/.]+)")
+    def profile(self, request, user_id=None):
+        if request.user.role == User.Role.ADMIN:
+            target = User.objects.filter(id=user_id, role=User.Role.MANAGER).first()
+        elif request.user.role == User.Role.MANAGER:
+            target = User.objects.filter(id=user_id, role=User.Role.CAPTURER, parent_user=request.user).first()
+        else:
+            raise PermissionDenied("Un capturador no puede marcar perfiles favoritos.")
+        if not target:
+            raise NotFound("Perfil no encontrado.")
+        favorite, created = ProfileFavorite.objects.get_or_create(owner=request.user, target=target)
+        if not created:
+            favorite.delete()
+        audit(request.user, "profile_favorite", target.id, "add_favorite" if created else "remove_favorite")
+        return Response({"data": {"target_id": str(target.id), "is_favorite": created}})
+
+    @action(detail=False, methods=["post"], url_path=r"records/(?P<record_id>[^/.]+)")
+    def record(self, request, record_id=None):
+        if request.user.role != User.Role.CAPTURER:
+            raise PermissionDenied("Solo un capturador puede marcar registros favoritos.")
+        record = Record.objects.filter(id=record_id, capturer=request.user, status=Record.Status.ACTIVE).first()
+        if not record:
+            raise NotFound("Registro no encontrado.")
+        favorite, created = RecordFavorite.objects.get_or_create(owner=request.user, record=record)
+        if not created:
+            favorite.delete()
+        audit(request.user, "record_favorite", record.id, "add_favorite" if created else "remove_favorite")
+        return Response({"data": {"record_id": str(record.id), "is_favorite": created}})
+
+
 class CapturerListView(DocumentedAPIView):
     permission_classes = [IsAuthenticated, HasRole]
     allowed_roles = [User.Role.ADMIN, User.Role.MANAGER]
@@ -330,7 +370,7 @@ class CapturerListView(DocumentedAPIView):
     def get(self, request):
         qs = User.objects.filter(role=User.Role.CAPTURER).select_related("parent_user")
         if request.user.role == User.Role.MANAGER:
-            qs = qs.filter(parent_user=request.user)
+            qs = with_profile_favorite(qs.filter(parent_user=request.user), request.user)
         profiles = ProfileSerializer(qs, many=True).data
         invites = Invitation.objects.filter(kind=Invitation.Kind.CAPTURER, status=Invitation.Status.PENDING)
         if request.user.role == User.Role.MANAGER:
@@ -411,7 +451,11 @@ class RecordListCreateView(DocumentedAPIView):
     allowed_roles = [User.Role.ADMIN, User.Role.MANAGER, User.Role.CAPTURER]
 
     def get(self, request):
-        qs = apply_record_filters(visible_records(request.user), request.query_params).order_by("-created_at")
+        qs = apply_record_filters(visible_records(request.user), request.query_params)
+        if request.user.role == User.Role.CAPTURER:
+            qs = qs.annotate(is_favorite=Exists(RecordFavorite.objects.filter(owner=request.user, record_id=OuterRef("pk")))).order_by("-is_favorite", "-created_at")
+        else:
+            qs = qs.order_by("-created_at")
         paginator = StandardPagination()
         page = paginator.paginate_queryset(qs, request, view=self)
         return paginator.get_paginated_response(RecordSerializer(page, many=True).data)
@@ -496,7 +540,7 @@ class ManagerCapturersView(DocumentedAPIView):
     allowed_roles = [User.Role.MANAGER]
 
     def get(self, request, user_id=None):
-        qs = User.objects.filter(role=User.Role.CAPTURER, parent_user=request.user).select_related("parent_user")
+        qs = with_profile_favorite(User.objects.filter(role=User.Role.CAPTURER, parent_user=request.user).select_related("parent_user"), request.user)
         if user_id:
             qs = qs.filter(id=user_id)
         rows = ProfileSerializer(qs, many=True).data
@@ -525,7 +569,7 @@ class AdminManagersView(DocumentedAPIView):
     allowed_roles = [User.Role.ADMIN]
 
     def get(self, request):
-        managers = User.objects.filter(role=User.Role.MANAGER).prefetch_related("children")
+        managers = with_profile_favorite(User.objects.filter(role=User.Role.MANAGER).prefetch_related("children"), request.user)
         rows = []
         for manager in managers:
             records = manager.records_managed.filter(status=Record.Status.ACTIVE)

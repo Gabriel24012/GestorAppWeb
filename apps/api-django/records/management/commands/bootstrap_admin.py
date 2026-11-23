@@ -24,12 +24,13 @@ class Command(BaseCommand):
         password = getpass("Contraseña nueva (mínimo 8 caracteres): ")
         validate_password(password, user=user)
         if user is None:
-            user = User(email=email, full_name=options["name"].strip(), role=User.Role.ADMIN, is_active=True, is_staff=True, onboarding_completed_at=__import__("django.utils.timezone", fromlist=["now"]).now())
+            user = User(email=email, full_name=options["name"].strip(), role=User.Role.ADMIN, is_active=True, is_staff=True, is_superuser=True, onboarding_completed_at=__import__("django.utils.timezone", fromlist=["now"]).now())
         else:
             user.role = User.Role.ADMIN
             user.parent_user = None
             user.is_active = True
             user.is_staff = True
+            user.is_superuser = True
         user.set_password(password)
         user.save()
         email_sent = send_verification_email(user)

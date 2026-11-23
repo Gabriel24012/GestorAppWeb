@@ -227,3 +227,23 @@ class UserPreference(models.Model):
     language = models.CharField(max_length=2, choices=Language.choices, default=Language.ES)
     updated_at = models.DateTimeField(auto_now=True)
 
+
+class ProfileFavorite(models.Model):
+    owner = models.ForeignKey(User, related_name="profile_favorites", on_delete=models.CASCADE)
+    target = models.ForeignKey(User, related_name="favorited_by", on_delete=models.CASCADE)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [models.UniqueConstraint(fields=["owner", "target"], name="unique_profile_favorite")]
+
+
+class RecordFavorite(models.Model):
+    owner = models.ForeignKey(User, related_name="record_favorites", on_delete=models.CASCADE)
+    record = models.ForeignKey(Record, related_name="favorited_by", on_delete=models.CASCADE)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [models.UniqueConstraint(fields=["owner", "record"], name="unique_record_favorite")]
+

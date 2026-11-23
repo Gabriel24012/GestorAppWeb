@@ -6,6 +6,7 @@ from datetime import date, timedelta
 
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import override_settings
 from django.utils import timezone
 from PIL import Image
@@ -13,7 +14,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import CaptureSession, EmailVerification, Invitation, Record, User
-from .views import ProfileImageView
+from .views import FavoriteViewSet, ProfileImageView
 
 
 class AuthenticationAndRoleContractTests(APITestCase):
@@ -87,6 +88,52 @@ class AuthenticationAndRoleContractTests(APITestCase):
         external_record.refresh_from_db()
         self.assertEqual(external_record.first_name, "Fuera")
         self.assertEqual(external_record.status, Record.Status.ACTIVE)
+
+    def test_favorites_are_real_actions_and_sort_each_role_list(self):
+        self.assertEqual(FavoriteViewSet.profile.mapping["post"], "profile")
+        self.assertEqual(FavoriteViewSet.record.mapping["post"], "record")
+
+        other_manager = User.objects.create_user(email="z-manager@example.test", password="local-test-password", full_name="Zeta Gestor", role=User.Role.MANAGER, parent_user=self.admin, email_verified=True)
+        self.client.force_authenticate(self.admin)
+        toggled_manager = self.client.post(f"/api/v1/favorites/profiles/{other_manager.id}", {}, format="json")
+        self.assertEqual(toggled_manager.status_code, 200)
+        self.assertTrue(toggled_manager.data["data"]["is_favorite"])
+        managers = self.client.get("/api/v1/admin/managers")
+        self.assertEqual(managers.status_code, 200)
+        self.assertEqual(managers.data["data"][0]["id"], str(other_manager.id))
+        self.assertTrue(managers.data["data"][0]["is_favorite"])
+
+        self.client.force_authenticate(self.manager)
+        toggled_capturer = self.client.post(f"/api/v1/favorites/profiles/{self.other_capturer.id}", {}, format="json")
+        self.assertEqual(toggled_capturer.status_code, 200)
+        capturers = self.client.get("/api/v1/manager/capturers")
+        self.assertEqual(capturers.status_code, 200)
+        self.assertEqual(capturers.data["data"][0]["id"], str(self.other_capturer.id))
+        self.assertTrue(capturers.data["data"][0]["is_favorite"])
+        self.assertEqual(self.client.post(f"/api/v1/favorites/profiles/{other_manager.id}", {}, format="json").status_code, 404)
+
+        self.client.force_authenticate(self.capturer)
+        toggled_record = self.client.post(f"/api/v1/favorites/records/{self.own_record.id}", {}, format="json")
+        self.assertEqual(toggled_record.status_code, 200)
+        records = self.client.get("/api/v1/records")
+        self.assertEqual(records.status_code, 200)
+        self.assertEqual(records.data["data"][0]["id"], str(self.own_record.id))
+        self.assertTrue(records.data["data"][0]["is_favorite"])
+        other_record = Record.objects.get(capturer=self.other_capturer)
+        self.assertEqual(self.client.post(f"/api/v1/favorites/records/{other_record.id}", {}, format="json").status_code, 404)
+
+        removed = self.client.post(f"/api/v1/favorites/records/{self.own_record.id}", {}, format="json")
+        self.assertEqual(removed.status_code, 200)
+        self.assertFalse(removed.data["data"]["is_favorite"])
+
+    def test_admin_can_be_promoted_for_django_admin(self):
+        self.assertFalse(self.admin.is_superuser)
+        output = io.StringIO()
+        call_command("promote_django_admin", email=self.admin.email, stdout=output)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_staff)
+        self.assertTrue(self.admin.is_superuser)
+        self.assertIn(self.admin.email, output.getvalue())
 
 
 @override_settings(ENABLE_DEMO_DATA=True)

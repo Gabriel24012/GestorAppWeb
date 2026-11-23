@@ -171,7 +171,7 @@ export class ManagerDashboardComponent implements OnInit {
           } @else {
             @for(item of capturers(); track item.id) {
             <tr>
-              <td><div class="member-identity">@if(item.profile_image) {<img class="member-avatar" [src]="item.profile_image" [alt]="'Foto de ' + (item.full_name || item.placeholder_name)">} @else {<span class="member-avatar-fallback">{{initials(item.full_name || item.placeholder_name || '')}}</span>}<span>{{item.full_name || item.placeholder_name || '-'}}</span></div></td>
+              <td><div class="member-identity">@if(item.kind === 'profile') {<button type="button" class="favorite-button" [class.active]="item.is_favorite" [attr.aria-label]="item.is_favorite ? 'Quitar capturador de favoritos' : 'Agregar capturador a favoritos'" (click)="toggleFavorite(item)">{{item.is_favorite ? '♥' : '♡'}}</button>}@if(item.profile_image) {<img class="member-avatar" [src]="item.profile_image" [alt]="'Foto de ' + (item.full_name || item.placeholder_name)">} @else {<span class="member-avatar-fallback">{{initials(item.full_name || item.placeholder_name || '')}}</span>}<span>{{item.full_name || item.placeholder_name || '-'}}</span></div></td>
               <td>{{item.total_records}}</td>
               <td>
                 @if(item.progress) {
@@ -202,6 +202,15 @@ export class ManagerCapturersComponent implements OnInit {
   barWidth(value: number) { return Math.min(value, 100); }
   initials(name: string) { return name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase() || '?'; }
   progressText(progress: NonNullable<ManagerCapturerRow['progress']>) { return `${progress.count} / ${progress.target} - ${progress.percentage}% - ${progress.status}`; }
+  toggleFavorite(item: ManagerCapturerRow) {
+    this.error.set('');
+    this.api.post<{data: {is_favorite: boolean}}>(`/favorites/profiles/${item.id}`, {}).subscribe({
+      next: ({data}) => this.capturers.update(rows => rows
+        .map(row => row.id === item.id ? { ...row, is_favorite: data.is_favorite } : row)
+        .sort((a, b) => Number(Boolean(b.is_favorite)) - Number(Boolean(a.is_favorite)))),
+      error: (e) => this.error.set(apiErrorMessage(e))
+    });
+  }
   deleteCapturer(item: ManagerCapturerRow) {
     if (!window.confirm(`¿Borrar permanentemente a ${item.full_name || item.email}? La acción no se puede deshacer. Si tiene registros asociados, la API bloqueará el borrado y explicará por qué.`)) return;
     this.error.set('');
