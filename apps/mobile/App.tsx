@@ -145,10 +145,16 @@ export default function App() {
       setProfileImageBusy(true);
       try {
         const asset = result.assets[0];
-        const uri = await uploadProfileImage(asset.uri, asset.mimeType, asset.fileName);
+        const uri = await uploadProfileImage(asset.uri);
         setProfile(p=>p?{...p,profile_image:uri}:p);
         setNotice('Foto de perfil actualizada.');
-      } catch(e) { setError(message(e)); }
+        Alert.alert('Foto actualizada', 'Tu nueva foto de perfil se guardó correctamente.');
+      } catch(e) {
+        const detail = message(e);
+        console.error('Profile image upload failed', e);
+        setError(detail);
+        Alert.alert('No se pudo subir la foto', detail);
+      }
       finally { setProfileImageBusy(false); }
     }
   }
@@ -163,8 +169,13 @@ export default function App() {
       await api('/profile/image', {method:'DELETE'});
       setProfile(p=>p?{...p,profile_image:''}:p);
       setNotice('Foto de perfil eliminada.');
+      Alert.alert('Foto eliminada', 'La foto de perfil se eliminó correctamente.');
     }
-    catch(e) { setError(message(e)); }
+    catch(e) {
+      const detail = message(e);
+      setError(detail);
+      Alert.alert('No se pudo eliminar la foto', detail);
+    }
     finally { setProfileImageBusy(false); }
   }
 

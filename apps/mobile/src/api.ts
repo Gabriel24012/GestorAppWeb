@@ -1,6 +1,8 @@
+import { fetch as expoFetch } from 'expo/fetch';
+import { File } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
 
-const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'http://172.20.10.2:8000/api/v1').replace(/\/$/, '');
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'https://gestion-captura-api.onrender.com/api/v1').replace(/\/$/, '');
 const ACCESS = 'access';
 const REFRESH = 'refresh';
 
@@ -9,10 +11,14 @@ export type ApiEnvelope<T> = { data: T; meta?: { page: number; limit: number; to
 
 export async function api<T>(path: string, options: RequestInit = {}, authenticated = true): Promise<T> {
   const access = authenticated ? await SecureStore.getItemAsync(ACCESS) : null;
-  const send = (token: string | null) => fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: { ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers }
-  });
+  const send = (token: string | null) => {
+    const multipart = options.body instanceof FormData;
+    const request = {
+      ...options,
+      headers: { ...(multipart ? {} : { 'Content-Type': 'application/json' }), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers }
+    };
+    return multipart ? expoFetch(`${API_URL}${path}`, request as any) : fetch(`${API_URL}${path}`, request);
+  };
   let response = await send(access);
   if (response.status === 401 && authenticated) {
     const refresh = await SecureStore.getItemAsync(REFRESH);
@@ -75,15 +81,11 @@ export async function getPreferences() {
   catch { const cached = await SecureStore.getItemAsync(PREFS); return cached ? JSON.parse(cached) : {theme:'light' as const,font_size:'normal' as const,language:'es' as const}; }
 }
 export async function savePreferences(value: {theme:'light'|'dark';font_size:'small'|'normal'|'large';language:'es'|'en'}) { await SecureStore.setItemAsync(PREFS, JSON.stringify(value)); return (await api<ApiEnvelope<typeof value>>('/preferences', { method:'PATCH', body:JSON.stringify(value) })).data; }
-export async function uploadProfileImage(uri: string, mimeType?: string | null, fileName?: string | null) {
-  const sourceName = (fileName || uri).split(/[?#]/, 1)[0].toLowerCase();
-  const inferredType = sourceName.endsWith('.png') ? 'image/png' : sourceName.endsWith('.webp') ? 'image/webp' : sourceName.endsWith('.jpg') || sourceName.endsWith('.jpeg') ? 'image/jpeg' : '';
-  const rawType = mimeType?.toLowerCase().split(';', 1)[0];
-  const reportedType = rawType === 'image/jpg' ? 'image/jpeg' : rawType;
-  const supportedTypes = ['image/jpeg', 'image/png', 'image/webp'];
-  const type = supportedTypes.includes(reportedType || '') ? reportedType! : inferredType || 'image/jpeg';
-  const extension = type === 'image/jpeg' ? 'jpg' : type.slice('image/'.length);
+export async function uploadProfileImage(uri: string) {
+  const file = new File(uri);
+  if (!file.exists) throw new Error('La foto seleccionada ya no está disponible. Elígela nuevamente.');
+  if (file.size > 5 * 1024 * 1024) throw new Error('La imagen no puede superar 5 MB.');
   const form = new FormData();
-  form.append('image', { uri, name: `profile-${Date.now()}.${extension}`, type } as any);
+  form.append('image', file);
   return (await api<ApiEnvelope<{profile_image:string}>>('/profile/image', { method:'POST', body:form })).data.profile_image;
 }
