@@ -4,6 +4,7 @@ import { AbstractControl, FormControl, FormGroup, ReactiveFormsModule, Validatio
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { finalize } from 'rxjs';
 import { ApiService } from '../core/api.service';
+import { AuthService } from '../core/auth.service';
 import type { GoalPeriod, ManagerRecordsResponse, RecordItem } from '../core/models';
 import { apiErrorMessage } from '../core/api-errors';
 
@@ -241,6 +242,7 @@ export class AdminManagerDetailComponent implements OnInit {
   imports: [CommonModule, ReactiveFormsModule],
   template: `
     <div class="page-title"><h1>Registros globales</h1><div><button (click)="download('csv')" [disabled]="!total()">CSV filtrado</button><button class="secondary" (click)="download('xlsx')" [disabled]="!total()">Excel filtrado</button></div></div>
+    @if(auth.profile()?.demo_data_enabled === true) {
     <section class="card demo-tools-card">
       <div><h2>Datos demo</h2><p class="muted">Crea 5 gestores, 5 capturadores por gestor y 20 registros completos por capturador (500 registros).</p></div>
       <div class="demo-actions"><button type="button" (click)="createDemoData()" [disabled]="demoLoading()">{{demoLoading() ? 'Procesando...' : 'Insertar demo'}}</button><button type="button" class="danger" (click)="deleteDemoData()" [disabled]="demoLoading()">Eliminar demo</button></div>
@@ -248,6 +250,7 @@ export class AdminManagerDetailComponent implements OnInit {
       @if(demoMessage()) {<p class="success">{{demoMessage()}}</p>}
       @if(demoError()) {<p class="error">{{demoError()}}</p>}
     </section>
+    }
     <section class="card records-filter-card">
       <form class="filters records-filters" [formGroup]="filters" (ngSubmit)="search()">
         <label>Buscar<input formControlName="q" placeholder="Nombre, teléfono, Clave Electoral o domicilio..."></label>
@@ -313,6 +316,7 @@ export class AdminManagerDetailComponent implements OnInit {
   `
 })
 export class AdminRecordsComponent implements OnInit {
+  readonly auth = inject(AuthService);
   private api = inject(ApiService);
   private route = inject(ActivatedRoute);
   managers = signal<AdminManagerRow[]>([]);

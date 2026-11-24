@@ -96,6 +96,8 @@ CORS_ALLOWED_ORIGINS = [origin.strip() for origin in os.environ.get("CORS_ALLOWE
 CORS_ALLOW_HEADERS = ["accept", "authorization", "content-type", "user-agent", "x-csrftoken", "x-requested-with"]
 
 REST_FRAMEWORK = {
+    # Export endpoints use ?format= for file types, not DRF renderer selection.
+    "URL_FORMAT_OVERRIDE": None,
     "DEFAULT_AUTHENTICATION_CLASSES": ["records.authentication.VerifiedJWTAuthentication"],
     "DEFAULT_PERMISSION_CLASSES": ["records.permissions.IsVerifiedUser"],
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend", "rest_framework.filters.SearchFilter", "rest_framework.filters.OrderingFilter"],

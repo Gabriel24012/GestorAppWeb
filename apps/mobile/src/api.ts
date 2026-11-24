@@ -6,7 +6,7 @@ const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'https://gestion-captura-api
 const ACCESS = 'access';
 const REFRESH = 'refresh';
 
-export type Profile = { id: string; email: string; full_name: string; role: 'admin' | 'gestor' | 'capturador'; email_verified?: boolean; profile_image?: string };
+export type Profile = { id: string; email: string; full_name: string; role: 'admin' | 'gestor' | 'capturador'; email_verified?: boolean; profile_image?: string; demo_data_enabled?: boolean };
 export type ApiEnvelope<T> = { data: T; meta?: { page: number; limit: number; total: number } };
 
 async function requestApi<T>(path: string, options: RequestInit, authenticated: boolean, read: (response: Response) => Promise<T>): Promise<T> {

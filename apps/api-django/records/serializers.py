@@ -1,6 +1,7 @@
 import re
 from datetime import date
 
+from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.db import models, transaction
 from rest_framework import serializers
@@ -37,10 +38,14 @@ class ProfileSerializer(serializers.ModelSerializer):
     parent_user_id = serializers.UUIDField(read_only=True)
     children = ProfileBriefSerializer(many=True, read_only=True)
     is_favorite = serializers.BooleanField(read_only=True, default=False)
+    demo_data_enabled = serializers.SerializerMethodField()
+
+    def get_demo_data_enabled(self, user) -> bool:
+        return user.role == User.Role.ADMIN and settings.ENABLE_DEMO_DATA
 
     class Meta:
         model = User
-        fields = ("id", "email", "full_name", "role", "parent", "parent_user_id", "children", "is_active", "email_verified", "email_verified_at", "profile_image", "onboarding_completed_at", "created_at", "is_favorite")
+        fields = ("id", "email", "full_name", "role", "parent", "parent_user_id", "children", "is_active", "email_verified", "email_verified_at", "profile_image", "onboarding_completed_at", "created_at", "is_favorite", "demo_data_enabled")
         read_only_fields = ("id", "role", "email_verified", "email_verified_at", "profile_image", "onboarding_completed_at", "created_at")
 
     def validate(self, attrs):

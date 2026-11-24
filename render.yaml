@@ -35,7 +35,7 @@ services:
       - key: BOOTSTRAP_ADMIN_TOKEN
         sync: false
       - key: ENABLE_DEMO_DATA
-        value: "true"
+        value: "false"
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM

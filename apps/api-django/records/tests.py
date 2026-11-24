@@ -10,6 +10,7 @@ from django.core.management import call_command
 from django.test import override_settings
 from django.utils import timezone
 from PIL import Image
+from openpyxl import load_workbook
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -39,6 +40,23 @@ class AuthenticationAndRoleContractTests(APITestCase):
         duplicate = RecordSerializer(data={"electoral_key": self.own_record.electoral_key.lower()}, partial=True)
         self.assertFalse(duplicate.is_valid())
         self.assertIn("electoral_key", duplicate.errors)
+
+    def test_export_returns_filtered_excel_and_csv(self):
+        self.client.force_authenticate(self.capturer)
+        response = self.client.get("/api/v1/exports/records?format=xlsx&q=Ana")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        workbook = load_workbook(io.BytesIO(response.content), read_only=True)
+        try:
+            rows = list(workbook.active.values)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[1][rows[0].index("first_name")], "Ana")
+        finally:
+            workbook.close()
+        csv_response = self.client.get("/api/v1/exports/records?format=csv&q=Ana")
+        self.assertEqual(csv_response.status_code, 200)
+        self.assertIn(b"Ana", csv_response.content)
+        self.assertNotIn(b"Luis", csv_response.content)
 
     def test_login_returns_profile_and_jwt_pair(self):
         response = self.client.post("/api/v1/auth/token", {"email": self.capturer.email, "password": "local-test-password"}, format="json")
