@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Clipboard, Image, Pressable, ScrollView, StyleSheet, Text as NativeText, TextInput as NativeTextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Clipboard, FlatList, Image, Modal, Pressable, ScrollView, StyleSheet, Text as NativeText, TextInput as NativeTextInput, useWindowDimensions, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { File, Paths } from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { StatusBar } from 'expo-status-bar';
-import { ApiEnvelope, Profile, api, currentUser, getPreferences, login, logout, savePreferences, uploadProfileImage } from './src/api';
+import { ApiEnvelope, Profile, api, currentUser, downloadApi, getPreferences, login, logout, savePreferences, uploadProfileImage } from './src/api';
 
 type Section = 'Inicio' | 'Captura' | 'Registros' | 'Gestores' | 'Capturadores' | 'Equipo' | 'Metas' | 'Configuración';
 type AnyRow = Record<string, any>;
 type RecordFilters = { q: string; capturer_id: string; date_from: string; date_to: string; address: string; district: string; neighborhood: string; postal_code: string };
+type RecordFilterOptions = { addresses: string[]; districts: string[]; neighborhoods: string[]; postal_codes: string[] };
 const EMPTY_RECORD_FILTERS: RecordFilters = { q: '', capturer_id: '', date_from: '', date_to: '', address: '', district: '', neighborhood: '', postal_code: '' };
 const DETAIL_RECORDS_LIMIT = 10;
 const RECORD_FIELDS: Array<[string, string, string, 'default' | 'numeric' | 'phone-pad']> = [
@@ -71,6 +74,11 @@ export default function App() {
   const [recordsPage, setRecordsPage] = useState(1);
   const [recordsTotal, setRecordsTotal] = useState(0);
   const [recordCapturers, setRecordCapturers] = useState<AnyRow[]>([]);
+  const [recordFilterOptions, setRecordFilterOptions] = useState<RecordFilterOptions | null>(null);
+  const [recordsPageSize, setRecordsPageSize] = useState(DETAIL_RECORDS_LIMIT);
+  const [recordsSearching, setRecordsSearching] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
+  const recordsRequest = useRef(0);
   const [preferences, setPreferences] = useState<{theme:'light'|'dark';font_size:'small'|'normal'|'large';language:'es'|'en'}>({theme:'light',font_size:'normal',language:'es'});
   C = preferences.theme === 'dark' ? DARK_COLORS : LIGHT_COLORS;
   styles = STYLE_CACHE[preferences.theme];
@@ -218,22 +226,24 @@ export default function App() {
 
   async function submitRecord() {
     setError('');
-    try {
-      const body = { ...recordDraft, electoral_key: recordDraft.electoral_key?.trim().toUpperCase(), capture_session_id: captureSessionId || null, section_code: 'GENERAL' };
-      await api('/records', { method: 'POST', body: JSON.stringify(body) });
-      setRecordDraft({}); Alert.alert(tr('Registro guardado', 'Record saved'), tr('El registro se agregó correctamente.', 'The record was added successfully.'));
-      if (section === 'Registros') await loadRecordsPage(1, appliedRecordFilters);
-      else changeSection('Registros');
-    } catch (e) { setError(message(e)); }
+    const body = { ...recordDraft, electoral_key: recordDraft.electoral_key?.trim().toUpperCase(), capture_session_id: captureSessionId || null, section_code: 'GENERAL' };
+    await api('/records', { method: 'POST', body: JSON.stringify(body) });
+    setRecordDraft({});
+    Alert.alert(tr('Registro guardado', 'Record saved'), tr('El registro se agregó correctamente.', 'The record was added successfully.'));
+    if (section === 'Registros') await loadRecordsPage(1, appliedRecordFilters);
+    else changeSection('Registros');
   }
 
-  async function loadRecordsPage(page: number, filters: RecordFilters = appliedRecordFilters, refreshCapturers = false) {
+  async function loadRecordsPage(page: number, filters: RecordFilters = appliedRecordFilters, refreshCapturers = false, limit = recordsPageSize, live = false) {
     if (!profile) return;
-    setLoading(true); setError(''); setDetail(null); setEditingRecord(null);
+    const requestId = ++recordsRequest.current;
+    if (!live) setLoading(true);
+    setError(''); setDetail(null); setEditingRecord(null);
     try {
       const path = profile.role === 'admin' ? '/admin/records' : profile.role === 'gestor' ? '/manager/records' : '/records';
-      const query = queryString({ ...filters, status: 'active', page, limit: DETAIL_RECORDS_LIMIT });
+      const query = queryString({ ...filters, status: 'active', page, limit });
       const result = await api<ApiEnvelope<AnyRow[]>>(`${path}?${query}`);
+      if (requestId !== recordsRequest.current) return;
       setPayload(result);
       setRecordsPage(result.meta?.page || page);
       setRecordsTotal(result.meta?.total ?? asArray(result.data).length);
@@ -243,8 +253,48 @@ export default function App() {
           setRecordCapturers(asArray(unwrap(members)).filter(row => row.kind !== 'invite'));
         } catch (e) { setError(message(e)); }
       }
+      if (!live && profile.role !== 'capturador' && (refreshCapturers || !recordFilterOptions)) {
+        const scope = profile.role === 'admin' ? 'admin' : 'manager';
+        const options = await api<ApiEnvelope<RecordFilterOptions>>(`/${scope}/record-filter-options`);
+        setRecordFilterOptions(options.data);
+      }
+    } catch (e) { if (requestId === recordsRequest.current) setError(message(e)); }
+    finally {
+      if (requestId === recordsRequest.current) {
+        setLoading(false);
+        setRecordsSearching(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (section !== 'Registros' || detail) {
+      setRecordsSearching(false);
+      return;
+    }
+    if (recordFilters.q === appliedRecordFilters.q) return;
+    setRecordsSearching(true);
+    const timer = setTimeout(() => {
+      const next = { ...appliedRecordFilters, q: recordFilters.q };
+      setAppliedRecordFilters(next);
+      void loadRecordsPage(1, next, false, recordsPageSize, true);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [section, detail, recordFilters.q, appliedRecordFilters.q, recordsPageSize]);
+
+  async function exportRecords() {
+    setExportBusy(true);
+    setError('');
+    try {
+      if (!await Sharing.isAvailableAsync()) throw new Error(tr('Este dispositivo no permite compartir archivos.', 'This device cannot share files.'));
+      const query = queryString({ ...appliedRecordFilters, status: 'active', format: 'xlsx' });
+      const bytes = await downloadApi(`/exports/records?${query}`);
+      const file = new File(Paths.cache, `registros-${Date.now()}.xlsx`);
+      file.create();
+      file.write(bytes);
+      await Sharing.shareAsync(file.uri, { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', UTI: 'org.openxmlformats.spreadsheetml.sheet' });
     } catch (e) { setError(message(e)); }
-    finally { setLoading(false); }
+    finally { setExportBusy(false); }
   }
 
   function applyRecordsFilter() {
@@ -450,7 +500,7 @@ export default function App() {
         await loadCapturerRecords(detailCapturerId, nextPage);
       } else {
         const generalRemaining = Math.max(0, recordsTotal - 1);
-        const generalLastPage = Math.max(1, Math.ceil(generalRemaining / DETAIL_RECORDS_LIMIT));
+        const generalLastPage = Math.max(1, Math.ceil(generalRemaining / recordsPageSize));
         await loadRecordsPage(Math.min(recordsPage, generalLastPage), appliedRecordFilters);
       }
     } catch (e) { setError(message(e)); }
@@ -534,16 +584,21 @@ export default function App() {
         {section === 'Inicio' && profile.role === 'admin' ? <AdminHome rows={asArray(data)} onOpen={openManager} onFavorite={row => void toggleProfileFavorite(row)} /> : null}
         {section === 'Inicio' && profile.role === 'gestor' ? <ManagerHome data={data} onSection={changeSection} /> : null}
         {section === 'Inicio' && profile.role === 'capturador' ? <CapturerHome data={data} onSection={changeSection} /> : null}
-        {section === 'Captura' && profile.role === 'capturador' ? <RecordForm draft={recordDraft} setDraft={setRecordDraft} onSubmit={() => void submitRecord()} /> : null}
+        {section === 'Captura' && profile.role === 'capturador' ? <RecordForm draft={recordDraft} setDraft={setRecordDraft} onSubmit={submitRecord} /> : null}
         {section === 'Gestores' && profile.role === 'admin' ? <><ManagerList rows={asArray(data)} onOpen={openManager} onFavorite={row=>void toggleProfileFavorite(row)} onResend={id=>void resendMemberInvite(id,'gestor')} onGenerateLink={id=>void generateMemberLink(id,'gestor')} /><InviteForm role="admin" inviteName={inviteName} setInviteName={setInviteName} inviteEmail={inviteEmail} setInviteEmail={setInviteEmail} onInvite={createInvite} /></> : null}
         {section === 'Capturadores' && profile.role === 'gestor' ? <><CapturerList rows={asArray(data)} onOpen={openCapturer} onFavorite={row=>void toggleProfileFavorite(row)} onResend={id=>void resendMemberInvite(id,'capturador')} onGenerateLink={id=>void generateMemberLink(id,'capturador')} /><InviteForm role="gestor" inviteName={inviteName} setInviteName={setInviteName} inviteEmail={inviteEmail} setInviteEmail={setInviteEmail} onInvite={createInvite} /></> : null}
         {section === 'Equipo' ? profile.role === 'admin' ? <AdminTeam managers={asArray(data?.managers)} capturers={asArray(data?.capturers)} onOpenManager={openManager} onOpenCapturer={openCapturer} onFavoriteManager={row=>void toggleProfileFavorite(row)} onResendManager={id=>void resendMemberInvite(id,'gestor')} onGenerateManagerLink={id=>void generateMemberLink(id,'gestor')} onResendCapturer={id=>void resendMemberInvite(id,'capturador')} onGenerateCapturerLink={id=>void generateMemberLink(id,'capturador')} /> : <CapturerList rows={asArray(data)} onOpen={openCapturer} onFavorite={row=>void toggleProfileFavorite(row)} onResend={id=>void resendMemberInvite(id,'capturador')} onGenerateLink={id=>void generateMemberLink(id,'capturador')} /> : null}
         {section === 'Registros' ? <>
-          {profile.role === 'capturador' ? <RecordForm draft={recordDraft} setDraft={setRecordDraft} onSubmit={() => void submitRecord()} /> : null}
+          <Card title={tr('Buscar registros', 'Search records')}>
+            <TextInput style={styles.input} placeholder={tr('Nombre, teléfono, clave electoral o domicilio', 'Name, phone, voter ID key, or address')} value={recordFilters.q} onChangeText={q => setRecordFilters(current => ({ ...current, q }))} autoCorrect={false} />
+            <FilterPicker label={tr('Registros por página', 'Records per page')} choices={[10, 25, 50, 100].map(size => ({ id: String(size), label: String(size) }))} value={String(recordsPageSize)} onSelect={value => { const limit = Number(value); setRecordsPageSize(limit); void loadRecordsPage(1, appliedRecordFilters, false, limit, true); }} allowEmpty={false} />
+            <Action secondary disabled={exportBusy || recordsSearching || !recordsTotal || recordFilters.q !== appliedRecordFilters.q} title={exportBusy ? tr('Preparando Excel…', 'Preparing Excel…') : tr('Exportar Excel', 'Export Excel')} onPress={() => void exportRecords()} />
+          </Card>
+          {profile.role === 'capturador' ? <RecordForm draft={recordDraft} setDraft={setRecordDraft} onSubmit={submitRecord} /> : null}
           {profile.role === 'admin' ? <Card title={tr('Datos demo', 'Demo data')} subtitle={tr('Crea 5 gestores, 5 capturadores por gestor y 20 registros completos por capturador.', 'Create 5 managers, 5 capturers per manager, and 20 complete records per capturer.')}><Action title={demoDataBusy ? tr('Procesando…', 'Processing…') : tr('Insertar demo', 'Insert demo')} disabled={demoDataBusy} onPress={confirmCreateDemoData} /><Action title={tr('Eliminar demo', 'Delete demo')} disabled={demoDataBusy} danger onPress={confirmDeleteDemoData} /></Card> : null}
-          {profile.role !== 'capturador' ? <RecordsFilterCard filters={recordFilters} setFilters={setRecordFilters} capturers={recordCapturers} onApply={applyRecordsFilter} onClear={clearRecordsFilter} /> : null}
+          {profile.role !== 'capturador' ? <RecordsFilterCard filters={recordFilters} setFilters={setRecordFilters} capturers={recordCapturers} options={recordFilterOptions} onApply={applyRecordsFilter} onClear={clearRecordsFilter} /> : null}
           {editingRecord ? <RecordEditForm draft={recordEditDraft} setDraft={setRecordEditDraft} busy={recordMutationBusy} onSave={() => void saveRecordEdit()} onCancel={() => setEditingRecord(null)} /> : null}
-          <RecordsList rows={asArray(data)} total={recordsTotal} page={recordsPage} busy={recordMutationBusy} onPage={page => void loadRecordsPage(page, appliedRecordFilters)} onEdit={beginRecordEdit} onDelete={confirmDeleteRecord} onToggleFavorite={profile.role === 'capturador' ? row => void toggleRecordFavorite(row) : undefined} />
+          <RecordsList rows={asArray(data)} total={recordsTotal} page={recordsPage} limit={recordsPageSize} loading={recordsSearching} busy={recordMutationBusy} onPage={page => void loadRecordsPage(page, appliedRecordFilters)} onEdit={beginRecordEdit} onDelete={confirmDeleteRecord} onToggleFavorite={profile.role === 'capturador' ? row => void toggleRecordFavorite(row) : undefined} />
         </> : null}
         {section === 'Metas' ? <GoalsView data={data} role={profile.role} managers={asArray((payload as any)?.managers)} capturers={asArray((payload as any)?.capturers)} managerId={managerId} setManagerId={setManagerId} goalCapturerId={goalCapturerId} setGoalCapturerId={setGoalCapturerId} goalTarget={goalTarget} setGoalTarget={setGoalTarget} goalStart={goalStart} setGoalStart={setGoalStart} goalEnd={goalEnd} setGoalEnd={setGoalEnd} onCreate={() => void createGoal()} /> : null}
       </>}
@@ -611,26 +666,111 @@ function RecordEditForm({ draft, setDraft, busy, onSave, onCancel }: { draft: Re
   </Card>;
 }
 
-function RecordsFilterCard({ filters, setFilters, capturers, onApply, onClear }: { filters: RecordFilters; setFilters: React.Dispatch<React.SetStateAction<RecordFilters>>; capturers: AnyRow[]; onApply: () => void; onClear: () => void }) {
+function FilterPicker({ label, value, choices, onSelect, emptyLabel = tr('Todos', 'All'), allowEmpty = true }: { label: string; value: string; choices: { id: string; label: string }[]; onSelect: (id: string) => void; emptyLabel?: string; allowEmpty?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const normalize = (text: string) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const query = normalize(search.trim());
+  const matches = open ? choices.filter(choice => normalize(choice.label).includes(query)) : [];
+  function choose(id: string) {
+    onSelect(id);
+    setOpen(false);
+  }
+  return <View style={{ gap: 4 }}>
+    <Text style={styles.fieldLabel}>{label}</Text>
+    <Pressable style={styles.choice} accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ expanded: open }} onPress={() => { setSearch(''); setOpen(true); }}>
+      <Text style={styles.choiceText}>{choices.find(choice => choice.id === value)?.label || value || emptyLabel}  ▾</Text>
+    </Pressable>
+    <Modal visible={open} animationType="slide" onRequestClose={() => setOpen(false)}>
+      <View style={[styles.page, { paddingHorizontal: 18, paddingTop: 60, paddingBottom: 24, gap: 10 }]}>
+        <Text style={styles.heading}>{label}</Text>
+        <TextInput style={styles.input} placeholder={tr('Buscar opciones', 'Search options')} value={search} onChangeText={setSearch} />
+        {allowEmpty ? <Choice label={emptyLabel} selected={!value} onPress={() => choose('')} /> : null}
+        <FlatList data={matches} keyExtractor={item => item.id} keyboardShouldPersistTaps="handled"
+          ListEmptyComponent={<Empty text={tr('No hay coincidencias.', 'No matches found.')} />}
+          renderItem={({ item }) => <Choice label={item.label} selected={value === item.id} onPress={() => choose(item.id)} />} />
+        <Action secondary title={tr('Cerrar', 'Close')} onPress={() => setOpen(false)} />
+      </View>
+    </Modal>
+  </View>;
+}
+
+function RecordsFilterCard({ filters, setFilters, capturers, options, onApply, onClear }: { filters: RecordFilters; setFilters: React.Dispatch<React.SetStateAction<RecordFilters>>; capturers: AnyRow[]; options: RecordFilterOptions | null; onApply: () => void; onClear: () => void }) {
   const update = (key: keyof RecordFilters, value: string) => setFilters(current => ({ ...current, [key]: value }));
+  const choices = (values: string[] = []) => values.map(value => ({ id: value, label: value }));
   return <Card title={tr('Filtrar registros', 'Filter records')} subtitle={tr('Busca y combina filtros como en el panel web.', 'Search and combine filters as in the web dashboard.')}>
-    <Text style={styles.fieldLabel}>{tr('Buscar', 'Search')}</Text>
-    <TextInput style={styles.input} placeholder={tr('Nombre, teléfono, clave electoral o domicilio', 'Name, phone, voter ID key, or address')} value={filters.q} onChangeText={value => update('q', value)} returnKeyType="search" onSubmitEditing={onApply} />
-    <Text style={styles.fieldLabel}>{tr('Capturador', 'Capturer')}</Text>
-    <ChoiceList rows={[{ id: '', full_name: tr('Todos los capturadores', 'All capturers') }, ...capturers]} value={filters.capturer_id} onSelect={value => update('capturer_id', value)} placeholder={tr('No hay capturadores disponibles.', 'No capturers are available.')} />
+    <FilterPicker label={tr('Capturador', 'Capturer')} choices={capturers.map(row => ({ id: row.id, label: row.full_name || row.email || row.id }))} value={filters.capturer_id} onSelect={value => update('capturer_id', value)} />
     <View style={styles.filterPair}><View style={styles.filterField}><Text style={styles.fieldLabel}>{tr('Desde', 'From')}</Text><TextInput style={styles.input} placeholder={tr('AAAA-MM-DD', 'YYYY-MM-DD')} value={filters.date_from} onChangeText={value => update('date_from', value)} /></View><View style={styles.filterField}><Text style={styles.fieldLabel}>{tr('Hasta', 'To')}</Text><TextInput style={styles.input} placeholder={tr('AAAA-MM-DD', 'YYYY-MM-DD')} value={filters.date_to} onChangeText={value => update('date_to', value)} /></View></View>
-    <TextInput style={styles.input} placeholder={tr('Domicilio', 'Address')} value={filters.address} onChangeText={value => update('address', value)} />
-    <TextInput style={styles.input} placeholder={tr('Distrito', 'District')} value={filters.district} onChangeText={value => update('district', value)} />
-    <TextInput style={styles.input} placeholder={tr('Fraccionamiento o colonia', 'Neighborhood')} value={filters.neighborhood} onChangeText={value => update('neighborhood', value)} />
-    <TextInput style={styles.input} placeholder={tr('Código postal', 'Postal code')} keyboardType="numeric" value={filters.postal_code} onChangeText={value => update('postal_code', value)} />
+    <FilterPicker label={tr('Domicilio', 'Address')} choices={choices(options?.addresses)} value={filters.address} onSelect={value => update('address', value)} />
+    <FilterPicker label={tr('Distrito', 'District')} choices={choices(options?.districts)} value={filters.district} onSelect={value => update('district', value)} />
+    <FilterPicker label={tr('Fraccionamiento o colonia', 'Neighborhood')} choices={choices(options?.neighborhoods)} value={filters.neighborhood} onSelect={value => update('neighborhood', value)} />
+    <FilterPicker label={tr('Código postal', 'Postal code')} choices={choices(options?.postal_codes)} value={filters.postal_code} onSelect={value => update('postal_code', value)} />
     <View style={styles.recordActions}><Action compact title={tr('Filtrar', 'Apply filters')} onPress={onApply} /><Action compact secondary title={tr('Limpiar', 'Clear')} onPress={onClear} /></View>
   </Card>;
 }
 
-function RecordForm({ draft, setDraft, onSubmit }: { draft: Record<string, string>; setDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>; onSubmit: () => void }) {
+function RecordForm({ draft, setDraft, onSubmit }: { draft: Record<string, string>; setDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>; onSubmit: () => Promise<void> }) {
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const now = new Date();
+  const [year, month, day] = (draft.birth_date || '--').split('-');
+  const yearNumber = Number(year);
+  const monthNumber = Number(month);
+  const dayCount = monthNumber ? new Date(yearNumber || 2000, monthNumber, 0).getDate() : 31;
+  const change = (name: string, value: string) => {
+    setDraft(current => ({ ...current, [name]: value }));
+    setErrors(current => ({ ...current, [name]: '', form: '' }));
+  };
+  const selectBirth = (nextYear: string, nextMonth: string, nextDay: string) => {
+    const maxDay = nextMonth ? new Date(Number(nextYear) || 2000, Number(nextMonth), 0).getDate() : 31;
+    change('birth_date', [nextYear, nextMonth, Number(nextDay) > maxDay ? '' : nextDay].join('-'));
+  };
+  const choices = (values: string[]) => values.map(value => ({ id: value, label: value }));
+  const required = ['first_name', 'paternal_surname', 'address', 'birth_date', 'phone', 'electoral_key'];
+  async function save() {
+    if (busy) return;
+    const issues: Record<string, string> = {};
+    for (const field of required) {
+      if (!draft[field]?.trim()) issues[field] = tr('Este campo es obligatorio.', 'This field is required.');
+    }
+    const birth = new Date(yearNumber, monthNumber - 1, Number(day));
+    const oldest = new Date(now.getFullYear() - 120, now.getMonth(), now.getDate());
+    if (!year || !month || !day) issues.birth_date = tr('Selecciona año, mes y día.', 'Select a year, month, and day.');
+    else if (birth < oldest || birth > now) issues.birth_date = tr('Elige una fecha válida.', 'Choose a valid date.');
+    else if (new Date(yearNumber + 18, monthNumber - 1, Number(day)) > now) issues.birth_date = tr('La persona debe tener 18 años cumplidos.', 'The person must be at least 18 years old.');
+    if (draft.phone?.trim() && !/^\d{10}$/.test(draft.phone)) issues.phone = tr('Escribe 10 dígitos.', 'Enter 10 digits.');
+    if (draft.postal_code?.trim() && !/^\d{5}$/.test(draft.postal_code)) issues.postal_code = tr('Escribe 5 dígitos.', 'Enter 5 digits.');
+    if (draft.electoral_key?.trim() && !/^[a-z0-9]{18}$/i.test(draft.electoral_key.trim())) issues.electoral_key = tr('Escribe 18 letras o números.', 'Enter 18 letters or digits.');
+    setErrors(issues);
+    if (Object.keys(issues).length) return;
+    setBusy(true);
+    try {
+      await onSubmit();
+    } catch (error) {
+      const body = (error as { body?: Record<string, unknown> })?.body;
+      for (const [name] of RECORD_FIELDS) {
+        const value = body?.[name];
+        if (typeof value === 'string') issues[name] = value;
+        else if (Array.isArray(value)) issues[name] = value.filter(item => typeof item === 'string').join(' ');
+      }
+      setErrors(Object.values(issues).some(Boolean) ? issues : { form: message(error) });
+    } finally { setBusy(false); }
+  }
   return <Card title={tr('Nuevo registro', 'New record')} subtitle={tr('Completa los datos de la persona.', "Enter the person's information.")}>
-    {RECORD_FIELDS.map(([name, labelEs, labelEn, keyboardType]) => <TextInput key={name} style={styles.input} placeholder={tr(labelEs, labelEn)} value={draft[name] || ''} keyboardType={keyboardType} autoCapitalize={name === 'electoral_key' ? 'characters' : 'sentences'} onChangeText={value => setDraft(current => ({ ...current, [name]: value }))} />)}
-    <Action title={tr('Guardar registro', 'Save record')} onPress={onSubmit} />
+    {RECORD_FIELDS.map(([name, labelEs, labelEn, keyboardType]) => {
+      const label = name === 'birth_date' ? tr('Fecha de nacimiento', 'Date of birth') : tr(labelEs, labelEn);
+      return <View key={name} style={{ gap: 4 }}>
+        <Text style={styles.fieldLabel}>{label}{required.includes(name) ? ' *' : ''}</Text>
+        {name === 'birth_date' ? <>
+          <FilterPicker label={tr('Año', 'Year')} value={year} choices={choices(Array.from({ length: 121 }, (_, i) => String(now.getFullYear() - i)))} onSelect={value => selectBirth(value, month, day)} allowEmpty={false} emptyLabel={tr('Elegir año', 'Choose year')} />
+          <FilterPicker label={tr('Mes', 'Month')} value={month} choices={Array.from({ length: 12 }, (_, i) => ({ id: String(i + 1).padStart(2, '0'), label: new Date(2000, i, 1).toLocaleDateString(currentLanguage === 'en' ? 'en-US' : 'es-MX', { month: 'long' }) }))} onSelect={value => selectBirth(year, value, day)} allowEmpty={false} emptyLabel={tr('Elegir mes', 'Choose month')} />
+          <FilterPicker label={tr('Día', 'Day')} value={day} choices={choices(Array.from({ length: dayCount }, (_, i) => String(i + 1).padStart(2, '0')))} onSelect={value => selectBirth(year, month, value)} allowEmpty={false} emptyLabel={tr('Elegir día', 'Choose day')} />
+        </> : <TextInput style={[styles.input, errors[name] && { borderColor: C.red }]} accessibilityLabel={label} value={draft[name] || ''} keyboardType={keyboardType} autoCapitalize={name === 'electoral_key' ? 'characters' : 'sentences'} onChangeText={value => change(name, value)} />}
+        {errors[name] ? <Text accessibilityLiveRegion="polite" style={{ color: C.red, fontSize: 12 }}>{errors[name]}</Text> : null}
+      </View>;
+    })}
+    {errors.form ? <Text style={styles.error}>{errors.form}</Text> : null}
+    <Action title={busy ? tr('Guardando…', 'Saving…') : tr('Guardar registro', 'Save record')} disabled={busy} onPress={() => void save()} />
   </Card>;
 }
 
@@ -675,7 +815,9 @@ function GoalsView(props: any) {
   const managers = props.role === 'admin' ? asArray(props.data?.managers) : [];
   const capturers = props.role === 'gestor' ? asArray(props.data?.capturers).filter((row: AnyRow) => row.kind !== 'invite') : [];
   return <><Card title={tr('Metas', 'Goals')} subtitle={tr('Avance de metas activas', 'Active goal progress')}>{goals.length ? goals.map((goal, i) => <GoalRow key={goal.id || i} goal={goal} />) : <Empty text={tr('No hay metas activas.', 'There are no active goals.')} />}</Card><Card title={tr('Crear meta', 'Create goal')} subtitle={props.role === 'admin' ? tr('Asignada a un gestor.', 'Assigned to a manager.') : tr('Para todo tu equipo o un capturador.', 'For your whole team or one capturer.')}>
-    {props.role === 'admin' ? <><Text style={styles.fieldLabel}>{tr('Gestor', 'Manager')}</Text><ChoiceList rows={managers} value={props.managerId} onSelect={props.setManagerId} placeholder={tr('Selecciona gestor', 'Select a manager')} /></> : <><Text style={styles.fieldLabel}>{tr('Alcance', 'Scope')}</Text><Action title={tr('Todo el equipo', 'Entire team')} secondary onPress={() => props.setGoalCapturerId('')} />{capturers.map((row: AnyRow) => <Choice key={row.id} label={row.full_name} selected={props.goalCapturerId === row.id} onPress={() => props.setGoalCapturerId(row.id)} />)}</>}
+    {props.role === 'admin'
+      ? <FilterPicker label={tr('Gestor', 'Manager')} choices={managers.map(row => ({ id: row.id, label: row.full_name || row.email || row.id }))} value={props.managerId} onSelect={props.setManagerId} emptyLabel={tr('Selecciona un gestor', 'Select a manager')} allowEmpty={false} />
+      : <FilterPicker label={tr('Alcance de la meta', 'Goal scope')} choices={capturers.map(row => ({ id: row.id, label: row.full_name || row.email || row.id }))} value={props.goalCapturerId} onSelect={props.setGoalCapturerId} emptyLabel={tr('Todo el equipo', 'Entire team')} />}
     <Text style={styles.fieldLabel}>{tr('Cantidad de registros que se deben capturar', 'Number of records to capture')}</Text>
     <TextInput style={styles.input} placeholder={tr('Ejemplo: 20', 'Example: 20')} keyboardType="number-pad" value={props.goalTarget} onChangeText={props.setGoalTarget} />
     <GoalDateField label={tr('Fecha de inicio de la meta', 'Goal start date')} value={props.goalStart} onSelect={props.setGoalStart} />

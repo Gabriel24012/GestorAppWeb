@@ -9,7 +9,7 @@ const REFRESH = 'refresh';
 export type Profile = { id: string; email: string; full_name: string; role: 'admin' | 'gestor' | 'capturador'; email_verified?: boolean; profile_image?: string };
 export type ApiEnvelope<T> = { data: T; meta?: { page: number; limit: number; total: number } };
 
-export async function api<T>(path: string, options: RequestInit = {}, authenticated = true): Promise<T> {
+async function requestApi<T>(path: string, options: RequestInit, authenticated: boolean, read: (response: Response) => Promise<T>): Promise<T> {
   const access = authenticated ? await SecureStore.getItemAsync(ACCESS) : null;
   const send = (token: string | null) => {
     const multipart = options.body instanceof FormData;
@@ -32,9 +32,17 @@ export async function api<T>(path: string, options: RequestInit = {}, authentica
       }
     }
   }
+  if (response.ok) return read(response);
   const body = response.status === 204 ? null : await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(formatApiError(body, response.status));
-  return body as T;
+  throw Object.assign(new Error(formatApiError(body, response.status)), { body });
+}
+
+export function api<T>(path: string, options: RequestInit = {}, authenticated = true): Promise<T> {
+  return requestApi(path, options, authenticated, async response => response.status === 204 ? null as T : await response.json().catch(() => ({})) as T);
+}
+
+export function downloadApi(path: string) {
+  return requestApi(path, {}, true, async response => new Uint8Array(await response.arrayBuffer()));
 }
 
 function formatApiError(body: any, status: number) {

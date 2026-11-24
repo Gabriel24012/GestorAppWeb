@@ -96,8 +96,12 @@ class RecordSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "capturer", "manager", "created_at", "updated_at", "versions")
 
     def validate_birth_date(self, value):
-        if value > date.today() or value < date.today().replace(year=date.today().year - 120):
+        today = date.today()
+        age = today.year - value.year - ((today.month, today.day) < (value.month, value.day))
+        if value > today or age > 120:
             raise serializers.ValidationError("La fecha de nacimiento debe estar entre hoy y hace 120 años.")
+        if age < 18 and (self.instance is None or self.instance.birth_date != value):
+            raise serializers.ValidationError("La persona debe tener 18 años cumplidos.")
         return value
 
     def validate_phone(self, value):
@@ -109,6 +113,11 @@ class RecordSerializer(serializers.ModelSerializer):
         value = value.strip().upper()
         if not re.fullmatch(r"[A-Z0-9]{18}", value):
             raise serializers.ValidationError("La clave electoral debe tener 18 caracteres alfanuméricos.")
+        matches = Record.objects.filter(electoral_key=value)
+        if self.instance:
+            matches = matches.exclude(pk=self.instance.pk)
+        if matches.exists():
+            raise serializers.ValidationError("Ya existe un registro con esta clave electoral.")
         return value
 
     def validate_postal_code(self, value):

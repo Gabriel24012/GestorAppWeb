@@ -14,6 +14,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import CaptureSession, EmailVerification, Invitation, Record, User
+from .serializers import RecordSerializer
 from .views import FavoriteViewSet, ProfileImageView
 
 
@@ -26,6 +27,18 @@ class AuthenticationAndRoleContractTests(APITestCase):
         self.session = CaptureSession.objects.create(capturer=self.capturer, manager=self.manager, leadership_name=self.manager.full_name)
         self.own_record = Record.objects.create(capture_session=self.session, capturer=self.capturer, manager=self.manager, leadership_name=self.manager.full_name, first_name="Ana", paternal_surname="Prueba", address="Calle Demo", birth_date=date(1990, 1, 1), phone="5512345678", electoral_key="AAAA000000HDFXXX01")
         Record.objects.create(capturer=self.other_capturer, manager=self.manager, leadership_name=self.manager.full_name, first_name="Luis", paternal_surname="Prueba", address="Calle Demo", birth_date=date(1990, 1, 1), phone="5512345679", electoral_key="BBBB000000HDFXXX02")
+
+    def test_birth_date_requires_completed_eighteen_years_and_key_is_unique(self):
+        today = date.today()
+        birthday = date(today.year - 18, today.month, min(today.day, 28)) if today.month == 2 else today.replace(year=today.year - 18)
+        serializer = RecordSerializer(data={"birth_date": birthday}, partial=True)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        minor = RecordSerializer(data={"birth_date": today.replace(year=today.year - 17, day=min(today.day, 28))}, partial=True)
+        self.assertFalse(minor.is_valid())
+        self.assertIn("birth_date", minor.errors)
+        duplicate = RecordSerializer(data={"electoral_key": self.own_record.electoral_key.lower()}, partial=True)
+        self.assertFalse(duplicate.is_valid())
+        self.assertIn("electoral_key", duplicate.errors)
 
     def test_login_returns_profile_and_jwt_pair(self):
         response = self.client.post("/api/v1/auth/token", {"email": self.capturer.email, "password": "local-test-password"}, format="json")

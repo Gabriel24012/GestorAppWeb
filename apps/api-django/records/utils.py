@@ -32,7 +32,14 @@ def visible_records(user):
 def apply_record_filters(qs, params):
     query = (params.get("q") or "").strip()
     if query:
-        qs = qs.filter(Q(first_name__icontains=query) | Q(paternal_surname__icontains=query) | Q(maternal_surname__icontains=query) | Q(phone__icontains=query) | Q(electoral_key__icontains=query) | Q(address__icontains=query))
+        qs = qs.filter(
+            Q(first_name__icontains=query) | Q(paternal_surname__icontains=query)
+            | Q(maternal_surname__icontains=query) | Q(phone__icontains=query)
+            | Q(electoral_key__icontains=query) | Q(address__icontains=query)
+            | Q(exterior_number__icontains=query) | Q(neighborhood__icontains=query)
+            | Q(district__icontains=query) | Q(postal_code__icontains=query)
+            | Q(observations__icontains=query) | Q(capturer__full_name__icontains=query)
+        )
     for key in ("address", "district", "neighborhood", "postal_code", "section_code", "leadership_name", "status"):
         if params.get(key):
             qs = qs.filter(**{f"{key}__iexact": params[key]})
