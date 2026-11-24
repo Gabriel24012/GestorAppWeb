@@ -19,6 +19,7 @@ const RECORD_FIELDS: Array<[string, string, string, 'default' | 'numeric' | 'pho
   ['phone', 'Teléfono', 'Phone', 'phone-pad'], ['electoral_key', 'Clave electoral', 'Voter ID key', 'default'], ['observations', 'Observaciones (opcional)', 'Notes (optional)', 'default']
 ];
 const today = () => new Date().toISOString().slice(0, 10);
+const normalizeRecordPhone = (value = '') => value.normalize('NFKC').replace(/[\s().\u200B-\u200F\uFEFF\-\u2010-\u2015]/g, '');
 let fontScale = 1;
 let currentLanguage: 'es' | 'en' = 'es';
 function tr(es: string, en: string) { return currentLanguage === 'en' ? en : es; }
@@ -86,6 +87,7 @@ export default function App() {
   fontScale = preferences.font_size === 'small' ? 0.88 : preferences.font_size === 'large' ? 1.15 : 1;
 
   function changeSection(next: Section) {
+    const refreshCurrentSection = next === section;
     setSection(next);
     setMenuOpen(false);
     setDetail(null);
@@ -100,6 +102,7 @@ export default function App() {
     setInviteLinkDescription('');
     setNotice('');
     setError('');
+    if (refreshCurrentSection) void loadSection();
   }
 
   useEffect(() => { currentUser().then(setProfile).catch(() => {}).finally(() => setLoading(false)); getPreferences().then(setPreferences).catch(() => {}); }, []);
@@ -138,7 +141,7 @@ export default function App() {
       else if (section === 'Gestores') path = '/gestores?role=gestor';
       else if (section === 'Capturadores') path = profile.role === 'gestor' ? '/capturadores' : '/capturadores';
       else if (section === 'Equipo') path = '/capturadores';
-      else if (section === 'Metas') path = '/manager/goals';
+      else if (section === 'Metas') path = profile.role === 'admin' ? '/admin/manager-goals' : '/manager/goals';
       const result = await api<any>(path);
       setPayload(result);
       const data = unwrap(result);
@@ -148,10 +151,18 @@ export default function App() {
         const capturers = await api<any>('/capturadores');
         setPayload({ managers: unwrap(managers), capturers: unwrap(capturers) });
       }
+      if (section === 'Gestores' && profile.role === 'admin') {
+        const detailed = await api<any>('/admin/managers');
+        const statsById = new Map(asArray(unwrap(detailed)).map(row => [row.id, row]));
+        setPayload(asArray(data).map(row => row.kind === 'invite' ? row : { ...row, ...(statsById.get(row.id) || {}) }));
+      }
       if (section === 'Metas') {
         const managers = profile.role === 'admin' ? await api<any>('/admin/managers') : null;
         const capturers = await api<any>('/capturadores');
-        setPayload({ goals: data, managers: managers ? unwrap(managers) : [], capturers: unwrap(capturers) });
+        const goals = profile.role === 'admin'
+          ? { active: asArray(data).filter(goal => goal.status === 'active' && !goal.archived_at), history: asArray(data).filter(goal => goal.status !== 'active' || goal.archived_at) }
+          : data;
+        setPayload({ goals, managers: managers ? unwrap(managers) : [], capturers: unwrap(capturers) });
       }
       if (section === 'Capturadores' && profile.role === 'gestor') {
         const detailed = await api<any>('/manager/capturers');
@@ -226,7 +237,7 @@ export default function App() {
 
   async function submitRecord() {
     setError('');
-    const body = { ...recordDraft, electoral_key: recordDraft.electoral_key?.trim().toUpperCase(), capture_session_id: captureSessionId || null, section_code: 'GENERAL' };
+    const body = { ...recordDraft, phone: normalizeRecordPhone(recordDraft.phone), electoral_key: recordDraft.electoral_key?.trim().toUpperCase(), capture_session_id: captureSessionId || null, section_code: 'GENERAL' };
     await api('/records', { method: 'POST', body: JSON.stringify(body) });
     setRecordDraft({});
     Alert.alert(tr('Registro guardado', 'Record saved'), tr('El registro se agregó correctamente.', 'The record was added successfully.'));
@@ -422,6 +433,24 @@ export default function App() {
     } catch (e) { setError(message(e)); }
   }
 
+  async function renameManager(id: string, fullName: string) {
+    const { data } = await api<ApiEnvelope<Profile>>(`/gestores/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ full_name: fullName }),
+    });
+    const update = (row: AnyRow) => row.id === id ? { ...row, full_name: data.full_name } : row;
+    setDetail(current => {
+      if (!current || (current.manager || current).id !== id) return current;
+      return current.manager ? { ...current, manager: update(current.manager) } : update(current);
+    });
+    setDetailTitle(data.full_name);
+    setPayload((current: any) => {
+      if (Array.isArray(current?.managers)) return { ...current, managers: current.managers.map(update) };
+      if (Array.isArray(current?.data)) return { ...current, data: current.data.map(update) };
+      return current;
+    });
+  }
+
   async function openManager(id: string, name: string) {
     setLoading(true); setError('');
     try { const result = await api<any>(`/admin/managers/${id}`); setDetail(unwrap(result)); setDetailTitle(name); }
@@ -469,7 +498,7 @@ export default function App() {
     if (!editingRecord) return;
     setRecordMutationBusy(true); setError(''); setNotice('');
     try {
-      await api(`/records/${editingRecord.id}`, { method: 'PATCH', body: JSON.stringify({ ...recordEditDraft, electoral_key: recordEditDraft.electoral_key?.trim().toUpperCase() }) });
+      await api(`/records/${editingRecord.id}`, { method: 'PATCH', body: JSON.stringify({ ...recordEditDraft, phone: normalizeRecordPhone(recordEditDraft.phone), electoral_key: recordEditDraft.electoral_key?.trim().toUpperCase() }) });
       setEditingRecord(null);
       setNotice(tr('Registro actualizado correctamente.', 'Record updated successfully.'));
       if (detailCapturerId) await loadCapturerRecords(detailCapturerId, detailRecordsPage);
@@ -571,7 +600,7 @@ export default function App() {
       <View style={styles.pageTitle}><Text style={styles.heading}>{detail ? detailTitle : sectionLabel(section)}</Text><Text style={styles.muted}>{detail ? tr('Resumen y actividad', 'Summary and activity') : subtitleFor(section, profile.role)}</Text></View>
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}
-      {detail ? <DetailView detail={detail} role={profile.role} records={detailRecords} recordsPage={detailRecordsPage} recordsTotal={detailRecordsTotal} recordsLoading={detailRecordsLoading} recordMutationBusy={recordMutationBusy} editingRecord={editingRecord} recordEditDraft={recordEditDraft} setRecordEditDraft={setRecordEditDraft} onBack={() => { setDetail(null); setDetailCapturerId(''); setDetailRecords([]); setEditingRecord(null); }} onToggle={(row, role) => void toggleProfile(row, role)} onDelete={confirmDeleteProfile} onRecordsPage={page => void loadCapturerRecords(detailCapturerId, page)} onEditRecord={beginRecordEdit} onCancelRecordEdit={() => setEditingRecord(null)} onSaveRecordEdit={() => void saveRecordEdit()} onDeleteRecord={confirmDeleteRecord} /> : loading ? <ActivityIndicator color={C.accent} style={{ marginTop: 28 }} /> : <>
+      {detail ? <DetailView detail={detail} role={profile.role} records={detailRecords} recordsPage={detailRecordsPage} recordsTotal={detailRecordsTotal} recordsLoading={detailRecordsLoading} recordMutationBusy={recordMutationBusy} editingRecord={editingRecord} recordEditDraft={recordEditDraft} setRecordEditDraft={setRecordEditDraft} onBack={() => { setDetail(null); setDetailCapturerId(''); setDetailRecords([]); setEditingRecord(null); }} onToggle={(row, role) => void toggleProfile(row, role)} onDelete={confirmDeleteProfile} onRenameManager={renameManager} onRecordsPage={page => void loadCapturerRecords(detailCapturerId, page)} onEditRecord={beginRecordEdit} onCancelRecordEdit={() => setEditingRecord(null)} onSaveRecordEdit={() => void saveRecordEdit()} onDeleteRecord={confirmDeleteRecord} /> : loading ? <ActivityIndicator color={C.accent} style={{ marginTop: 28 }} /> : <>
         {section === 'Configuración' ? <>
           <Card title={tr('Correo y cuenta', 'Email and account')}><Text style={styles.rowSub}>{profile.email_verified ? tr('Correo verificado', 'Email verified') : tr('Correo pendiente de verificación', 'Email verification pending')}</Text>{!profile.email_verified ? <Action title={tr('Reenviar verificación', 'Resend verification')} secondary onPress={() => void resendVerification()} /> : null}</Card>
           <Card title={tr('Apariencia', 'Appearance')}>
@@ -634,7 +663,7 @@ function ManagerList({ rows, onOpen, onFavorite, onResend, onGenerateLink }: { r
 }
 
 function ManagerRow({ row, onPress, onFavorite }: { row: AnyRow; onPress: () => void; onFavorite?: () => void }) {
-  return <Pressable onPress={onPress} style={styles.personRow}>{row.profile_image?<Image source={{uri:row.profile_image}} style={styles.avatarImage}/>:<View style={styles.avatar}><Text style={styles.avatarText}>{initials(row.full_name)}</Text></View>}<View style={styles.rowMain}><Text style={styles.rowTitle} numberOfLines={1}>{row.full_name || tr('Gestor', 'Manager')}</Text><Text style={styles.rowSub} numberOfLines={1}>{row.email || tr('Sin correo', 'No email')} · {row.is_active === false ? tr('Inactivo', 'Inactive') : tr('Activo', 'Active')}</Text><Text style={styles.rowMeta} numberOfLines={1}>{row.total_capturadores || 0} {tr('capturadores', 'capturers')} · {row.total_records || 0} {tr('registros', 'records')} · {row.email_verified ? tr('Verificado', 'Verified') : tr('Pendiente', 'Pending')}</Text></View>{onFavorite ? <HeartButton active={Boolean(row.is_favorite)} onPress={onFavorite} /> : null}<Text style={styles.chevron}>›</Text></Pressable>;
+  return <Pressable onPress={onPress} style={styles.personRow}>{row.profile_image?<Image source={{uri:row.profile_image}} style={styles.avatarImage}/>:<View style={styles.avatar}><Text style={styles.avatarText}>{initials(row.full_name)}</Text></View>}<View style={styles.rowMain}><Text style={styles.rowTitle} numberOfLines={1}>{row.full_name || tr('Gestor', 'Manager')}</Text><Text style={styles.rowSub} numberOfLines={1}>{row.email || tr('Sin correo', 'No email')} · {row.is_active === false ? tr('Inactivo', 'Inactive') : tr('Activo', 'Active')}</Text><Text style={styles.rowMeta} numberOfLines={2}>{row.total_capturadores ?? 0} {tr('capturadores', 'capturers')} · {row.total_records ?? 0} {tr('registros', 'records')} · {row.active_goals ?? 0} {tr('metas activas', 'active goals')}</Text></View>{onFavorite ? <HeartButton active={Boolean(row.is_favorite)} onPress={onFavorite} /> : null}<Text style={styles.chevron}>›</Text></Pressable>;
 }
 
 function CapturerList({ rows, onOpen, onFavorite, onResend, onGenerateLink }: { rows: AnyRow[]; onOpen: (id: string, name: string) => void; onFavorite?: (row: AnyRow) => void; onResend?: (id: string) => void; onGenerateLink?: (id: string) => void }) {
@@ -738,7 +767,9 @@ function RecordForm({ draft, setDraft, onSubmit }: { draft: Record<string, strin
     if (!year || !month || !day) issues.birth_date = tr('Selecciona año, mes y día.', 'Select a year, month, and day.');
     else if (birth < oldest || birth > now) issues.birth_date = tr('Elige una fecha válida.', 'Choose a valid date.');
     else if (new Date(yearNumber + 18, monthNumber - 1, Number(day)) > now) issues.birth_date = tr('La persona debe tener 18 años cumplidos.', 'The person must be at least 18 years old.');
-    if (draft.phone?.trim() && !/^\d{10}$/.test(draft.phone)) issues.phone = tr('Escribe 10 dígitos.', 'Enter 10 digits.');
+    if (!issues.phone && !/^[0-9]{10}$/.test(normalizeRecordPhone(draft.phone))) {
+      issues.phone = tr('Escribe los 10 dígitos del número local, sin código de país.', 'Enter the 10-digit local number without the country code.');
+    }
     if (draft.postal_code?.trim() && !/^\d{5}$/.test(draft.postal_code)) issues.postal_code = tr('Escribe 5 dígitos.', 'Enter 5 digits.');
     if (draft.electoral_key?.trim() && !/^[a-z0-9]{18}$/i.test(draft.electoral_key.trim())) issues.electoral_key = tr('Escribe 18 letras o números.', 'Enter 18 letters or digits.');
     setErrors(issues);
@@ -835,17 +866,19 @@ function InviteForm(props: {role:'admin'|'gestor'; inviteName:string; setInviteN
   </Card>;
 }
 
-function DetailView({ detail, role, records, recordsPage, recordsTotal, recordsLoading, recordMutationBusy, editingRecord, recordEditDraft, setRecordEditDraft, onBack, onToggle, onDelete, onRecordsPage, onEditRecord, onCancelRecordEdit, onSaveRecordEdit, onDeleteRecord }: { detail: AnyRow; role: Profile['role']; records: AnyRow[]; recordsPage: number; recordsTotal: number; recordsLoading: boolean; recordMutationBusy: boolean; editingRecord: AnyRow | null; recordEditDraft: Record<string, string>; setRecordEditDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>; onBack: () => void; onToggle: (row: AnyRow, role: 'gestor' | 'capturador') => void; onDelete: (row: AnyRow, role: 'gestor' | 'capturador') => void; onRecordsPage: (page: number) => void; onEditRecord: (row: AnyRow) => void; onCancelRecordEdit: () => void; onSaveRecordEdit: () => void; onDeleteRecord: (row: AnyRow) => void }) {
+function DetailView({ detail, role, records, recordsPage, recordsTotal, recordsLoading, recordMutationBusy, editingRecord, recordEditDraft, setRecordEditDraft, onBack, onToggle, onDelete, onRenameManager, onRecordsPage, onEditRecord, onCancelRecordEdit, onSaveRecordEdit, onDeleteRecord }: { detail: AnyRow; role: Profile['role']; records: AnyRow[]; recordsPage: number; recordsTotal: number; recordsLoading: boolean; recordMutationBusy: boolean; editingRecord: AnyRow | null; recordEditDraft: Record<string, string>; setRecordEditDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>; onBack: () => void; onToggle: (row: AnyRow, role: 'gestor' | 'capturador') => void; onDelete: (row: AnyRow, role: 'gestor' | 'capturador') => void; onRenameManager: (id: string, name: string) => Promise<void>; onRecordsPage: (page: number) => void; onEditRecord: (row: AnyRow) => void; onCancelRecordEdit: () => void; onSaveRecordEdit: () => void; onDeleteRecord: (row: AnyRow) => void }) {
   const manager = detail.manager || detail;
   const capturer = detail.capturer || detail.profile || detail;
   const isManager = role === 'admin' && Boolean(detail.manager || detail.total_capturadores !== undefined);
-  if (isManager) return <><Action title={tr('Volver a la lista', 'Back to list')} secondary onPress={onBack} /><View style={styles.stats}><Stat label={tr('Capturadores', 'Capturers')} value={detail.total_capturadores || 0} /><Stat label={tr('Registros', 'Records')} value={detail.total_records || 0} /><Stat label={tr('Metas activas', 'Active goals')} value={detail.active_goals || 0} /></View><Card title={tr('Perfil', 'Profile')}><Info label={tr('Nombre', 'Name')} value={manager.full_name} /><Info label={tr('Correo', 'Email')} value={manager.email} /><Info label={tr('Estado', 'Status')} value={manager.is_active === false ? tr('Inactivo', 'Inactive') : tr('Activo', 'Active')} /><Action title={manager.is_active === false ? tr('Activar gestor', 'Activate manager') : tr('Desactivar gestor', 'Deactivate manager')} secondary onPress={() => onToggle(manager, 'gestor')} /><Action title={tr('Borrar gestor permanentemente', 'Permanently delete manager')} danger onPress={() => onDelete(manager, 'gestor')} /></Card><Card title={tr('Metas activas', 'Active goals')}>{asArray(detail.active_goals_list).length ? asArray(detail.active_goals_list).map((goal, i) => <GoalRow key={goal.id || i} goal={goal} />) : <Empty text={tr('Sin metas activas.', 'No active goals.')} />}</Card><Card title={tr('Capturadores con más registros', 'Capturers with the most records')}><Rankings rows={asArray(detail.ranking)} /></Card><Card title={tr('Zonas principales', 'Top areas')}><Rankings rows={asArray(detail.top_zones).map((r: AnyRow) => ({ full_name: r.zone, total_records: r.total }))} /></Card></>;
+  if (isManager) return <><Action title={tr('Volver a la lista', 'Back to list')} secondary onPress={onBack} /><View style={styles.stats}><Stat label={tr('Capturadores', 'Capturers')} value={detail.total_capturadores || 0} /><Stat label={tr('Registros', 'Records')} value={detail.total_records || 0} /><Stat label={tr('Metas activas', 'Active goals')} value={detail.active_goals || 0} /></View><Card title={tr('Perfil', 'Profile')}><ManagerNameEditor key={manager.id} name={manager.full_name} onSave={name => onRenameManager(manager.id, name)} /><Info label={tr('Correo', 'Email')} value={manager.email} /><Info label={tr('Estado', 'Status')} value={manager.is_active === false ? tr('Inactivo', 'Inactive') : tr('Activo', 'Active')} /><Action title={manager.is_active === false ? tr('Activar gestor', 'Activate manager') : tr('Desactivar gestor', 'Deactivate manager')} secondary onPress={() => onToggle(manager, 'gestor')} /><Action title={tr('Borrar gestor permanentemente', 'Permanently delete manager')} danger onPress={() => onDelete(manager, 'gestor')} /></Card><Card title={tr('Metas activas', 'Active goals')}>{asArray(detail.active_goals_list).length ? asArray(detail.active_goals_list).map((goal, i) => <GoalRow key={goal.id || i} goal={goal} />) : <Empty text={tr('Sin metas activas.', 'No active goals.')} />}</Card><Card title={tr('Capturadores con más registros', 'Capturers with the most records')}><Rankings rows={asArray(detail.ranking)} /></Card><Card title={tr('Zonas principales', 'Top areas')}><Rankings rows={asArray(detail.top_zones).map((r: AnyRow) => ({ full_name: r.zone, total_records: r.total }))} /></Card></>;
   return <><Action title={tr('Volver a la lista', 'Back to list')} secondary onPress={onBack} /><View style={styles.stats}><Stat label={tr('Registros', 'Records')} value={detail.total_records || capturer.total_records || recordsTotal || 0} /><Stat label={tr('Hoy', 'Today')} value={capturer.records_today || 0} /><Stat label={tr('Esta semana', 'This week')} value={capturer.records_week || 0} /></View><Card title={tr('Perfil', 'Profile')}><Info label={tr('Nombre', 'Name')} value={capturer.full_name || capturer.placeholder_name} /><Info label={tr('Correo', 'Email')} value={capturer.email} /><Info label={tr('Estado', 'Status')} value={capturer.is_active === false ? tr('Inactivo', 'Inactive') : tr('Activo', 'Active')} /><Action title={capturer.is_active === false ? tr('Activar capturador', 'Activate capturer') : tr('Desactivar capturador', 'Deactivate capturer')} secondary onPress={() => onToggle(capturer, 'capturador')} /><Action title={tr('Borrar capturador permanentemente', 'Permanently delete capturer')} danger onPress={() => onDelete(capturer, 'capturador')} /></Card>{detail.current_goal ? <Card title={tr('Meta actual', 'Current goal')}><GoalRow goal={detail.current_goal} /></Card> : null}{editingRecord ? <RecordEditForm draft={recordEditDraft} setDraft={setRecordEditDraft} busy={recordMutationBusy} onSave={onSaveRecordEdit} onCancel={onCancelRecordEdit} /> : null}<RecordsList rows={records} total={recordsTotal} page={recordsPage} loading={recordsLoading} busy={recordMutationBusy} onPage={onRecordsPage} onEdit={onEditRecord} onDelete={onDeleteRecord} /></>;
 }
 
 function GoalRow({ goal }: { goal: AnyRow }) {
-  const target = Number(goal.target_count || 0); const current = Number(goal.current_count || goal.progress?.current_count || goal.progress?.total_records || 0); const pct = target ? Math.min(100, Math.round(current / target * 100)) : 0;
-  const period = goal.period_type === 'weekly' ? tr('Semanal', 'Weekly') : goal.period_type || tr('Periodo', 'Period');
+  const target = Number(goal.progress?.target ?? goal.target_count ?? 0);
+  const current = Number(goal.progress?.count ?? goal.current_count ?? 0);
+  const pct = Number(goal.progress?.percentage ?? (target ? Math.min(100, Math.round(current / target * 100)) : 0));
+  const period = goal.period_type === 'daily' ? tr('Diaria', 'Daily') : goal.period_type === 'weekly' ? tr('Semanal', 'Weekly') : goal.period_type === 'monthly' ? tr('Mensual', 'Monthly') : tr('Periodo', 'Period');
   return <View style={styles.goalRow}><View style={styles.recordTop}><Text style={styles.rowTitle}>{goal.capturer?.full_name || goal.manager?.full_name || (goal.capturer_id ? tr('Meta individual', 'Individual goal') : tr('Meta de equipo', 'Team goal'))}</Text><Text style={styles.rowMeta}>{period}</Text></View><Text style={styles.rowSub}>{current} {tr('de', 'of')} {target} {tr('registros', 'records')} · {goal.starts_on || ''} {tr('a', 'to')} {goal.ends_on || ''}</Text><View style={styles.progress}><View style={[styles.progressFill, { width: `${pct}%` }]} /></View><Text style={styles.rowMeta}>{pct}% {tr('completado', 'complete')}</Text></View>;
 }
 
@@ -861,6 +894,43 @@ function Action({ title, onPress, secondary = false, danger = false, disabled = 
 function Stat({ label, value }: { label: string; value: string | number }) { return <View style={styles.stat}><Text style={styles.statValue}>{value}</Text><Text style={styles.statLabel}>{label}</Text></View>; }
 function Info({ label, value }: { label: string; value?: string | number }) { return <View style={styles.infoRow}><Text style={styles.infoLabel}>{label}</Text><Text style={styles.infoValue}>{value || '—'}</Text></View>; }
 function Empty({ text }: { text: string }) { return <Text style={styles.empty}>{text}</Text>; }
+function ManagerNameEditor({ name, onSave }: { name: string; onSave: (name: string) => Promise<void> }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    if (busy) return;
+    const fullName = draft?.trim();
+    if (!fullName) {
+      setError(tr('Escribe el nombre del gestor.', 'Enter the manager’s name.'));
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await onSave(fullName);
+      setDraft(null);
+    } catch (e) { setError(message(e)); }
+    finally { setBusy(false); }
+  }
+
+  if (draft === null) return <>
+    <Info label={tr('Nombre', 'Name')} value={name} />
+    <Action secondary title={tr('Editar nombre', 'Edit name')} onPress={() => setDraft(name || '')} />
+  </>;
+  return <>
+    <Text style={styles.fieldLabel}>{tr('Nombre completo', 'Full name')}</Text>
+    <TextInput style={styles.input} value={draft} autoCapitalize="words" editable={!busy}
+      onChangeText={value => { setDraft(value); setError(''); }} />
+    {error ? <Text style={styles.error}>{error}</Text> : null}
+    <View style={styles.recordActions}>
+      <Action compact title={busy ? tr('Guardando…', 'Saving…') : tr('Guardar nombre', 'Save name')} disabled={busy} onPress={() => void save()} />
+      <Action compact secondary title={tr('Cancelar', 'Cancel')} disabled={busy} onPress={() => { setDraft(null); setError(''); }} />
+    </View>
+  </>;
+}
+
 function unwrap(result: any): any { return result && typeof result === 'object' && 'data' in result ? result.data : result; }
 function asArray(value: any): AnyRow[] { return Array.isArray(value) ? value : []; }
 function queryString(values: Record<string, string | number>) { return Object.entries(values).filter(([, value]) => value !== '' && value !== null && value !== undefined).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`).join('&'); }
